@@ -1,32 +1,41 @@
 import { useState } from 'react';
-import { api } from './api.js';
+import { api, uploadRule } from './api.js';
 import { Avatar } from './usePresence.jsx';
 import { IconDoc, IconUsers, IconHistory, IconFileIn } from './Icons.jsx';
 
 const HIGHLIGHTS = [
   { icon: IconUsers, title: 'Share with your team', text: 'Give edit or view access and see who is in the doc right now.' },
   { icon: IconHistory, title: 'Never lose work', text: 'Autosave, conflict protection and full version history.' },
-  { icon: IconFileIn, title: 'Bring your files', text: 'Turn .docx, .md and .txt files into editable documents.' },
+  { icon: IconFileIn, title: 'Bring your files', text: () => `Turn ${uploadRule()} files into editable documents.` },
 ];
 
-const DEMO = [
-  { email: 'alice@ajaia.test', name: 'Alice', note: 'owns the welcome doc' },
-  { email: 'bob@ajaia.test', name: 'Bob', note: 'has the welcome doc shared' },
-  { email: 'carol@ajaia.test', name: 'Carol', note: 'no access yet' },
-];
-
-export default function Login({ onLogin, notice }) {
-  const [email, setEmail] = useState('alice@ajaia.test');
-  const [password, setPassword] = useState('password123');
+export default function Login({ onLogin, notice, config }) {
+  const demo = config?.demoAccounts || [];
+  const canSignup = Boolean(config?.allowSignup);
+  const minLength = config?.minPasswordLength || 8;
+  const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState(demo[0]?.email || '');
+  const [password, setPassword] = useState(demo[0]?.password || '');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const signup = mode === 'signup';
+
+  function switchMode(next) {
+    setMode(next);
+    setError('');
+    if (next === 'signup') {
+      setEmail('');
+      setPassword('');
+    }
+  }
 
   async function submit(e) {
     e?.preventDefault();
     setError('');
     setLoading(true);
     try {
-      const { user } = await api.login(email, password);
+      const { user } = signup ? await api.signup(name, email, password) : await api.login(email, password);
       onLogin(user);
     } catch (err) {
       setError(err.message);
@@ -48,7 +57,7 @@ export default function Login({ onLogin, notice }) {
               <span className="hl-icon"><Icon size={18} /></span>
               <span>
                 <strong>{title}</strong>
-                <span>{text}</span>
+                <span>{typeof text === 'function' ? text() : text}</span>
               </span>
             </li>
           ))}
@@ -57,8 +66,8 @@ export default function Login({ onLogin, notice }) {
           <div className="hero-card-top">
             <span className="hero-dot" /><span className="hero-dot" /><span className="hero-dot" />
             <span className="hero-avatars">
-              <Avatar name="Alice Owner" email="alice@ajaia.test" size={22} />
-              <Avatar name="Bob Teammate" email="bob@ajaia.test" size={22} ring />
+              <Avatar name="Maya Chen" email="maya" size={22} />
+              <Avatar name="Leo Park" email="leo" size={22} ring />
             </span>
           </div>
           <div className="hero-line w70" /><div className="hero-line w90" /><div className="hero-line w50" />
@@ -67,43 +76,71 @@ export default function Login({ onLogin, notice }) {
 
       <section className="login-side">
         <form className="login-card" onSubmit={submit}>
-          <h2>Sign in</h2>
-          <p className="muted">Use a demo account to try editing and sharing.</p>
+          <h2>{signup ? 'Create your account' : 'Sign in'}</h2>
+          <p className="muted">
+            {signup
+              ? 'Start writing and sharing in under a minute.'
+              : demo.length
+                ? 'Use a demo account below, or your own account.'
+                : 'Welcome back.'}
+          </p>
+          {signup && (
+            <label>
+              Name
+              <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={80} required />
+            </label>
+          )}
           <label>
             Email
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required />
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete={signup ? 'email' : 'username'} required />
           </label>
           <label>
             Password
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={signup ? 'new-password' : 'current-password'}
+              minLength={signup ? minLength : undefined}
+              required
+            />
+            {signup && <span className="field-hint">At least {minLength} characters</span>}
           </label>
           {notice && !error && <div className="notice" role="status">{notice}</div>}
           {error && <div className="error" role="alert">{error}</div>}
           <button className="btn primary block lg" disabled={loading}>
-            {loading ? 'Signing in…' : 'Sign in'}
+            {loading ? (signup ? 'Creating account…' : 'Signing in…') : signup ? 'Create account' : 'Sign in'}
           </button>
-          <div className="demo">
-            <div className="small muted">
-              Demo accounts · password <code>password123</code>
-            </div>
-            {DEMO.map((d) => (
-              <button
-                type="button"
-                key={d.email}
-                className={`demo-user ${email === d.email ? 'selected' : ''}`}
-                onClick={() => {
-                  setEmail(d.email);
-                  setPassword('password123');
-                }}
-              >
-                <Avatar name={d.name} email={d.email} size={30} />
-                <span>
-                  <strong>{d.name}</strong>
-                  <span className="muted small"> {d.note}</span>
-                </span>
+          {canSignup && (
+            <p className="switch-mode">
+              {signup ? 'Already have an account?' : 'New here?'}{' '}
+              <button type="button" className="link" onClick={() => switchMode(signup ? 'signin' : 'signup')}>
+                {signup ? 'Sign in' : 'Create an account'}
               </button>
-            ))}
-          </div>
+            </p>
+          )}
+          {!signup && demo.length > 0 && (
+            <div className="demo">
+              <div className="small muted">Demo accounts</div>
+              {demo.map((d) => (
+                <button
+                  type="button"
+                  key={d.email}
+                  className={`demo-user ${email === d.email ? 'selected' : ''}`}
+                  onClick={() => {
+                    setEmail(d.email);
+                    setPassword(d.password);
+                  }}
+                >
+                  <Avatar name={d.name} email={d.email} size={30} />
+                  <span>
+                    <strong>{d.name.split(' ')[0]}</strong>
+                    <span className="muted small"> {d.hint}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </form>
       </section>
     </div>

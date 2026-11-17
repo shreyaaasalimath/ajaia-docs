@@ -1,5 +1,12 @@
 # AI-Native Workflow Note
 
+> **In 30 seconds**
+> - **Tool:** Claude as a coding assistant that could run code, tests and a headless browser.
+> - **Where it sped me up:** boilerplate, library glue (TipTap, mammoth, sanitize-html), writing tests, and rerunning browser checks after every change.
+> - **What was not left to the AI alone:** scope cuts, permission rules, and conflict and failure behaviour were proposed with the assistant, reviewed and accepted by me, and each one is pinned down by a test.
+> - **What I rejected or fixed:** the table below lists real defects in AI-generated code, including silent data loss after a failed save and a privacy leak in the user directory, each found by a test, a log or a review.
+> - **How I verified:** 23 API tests on SQLite and Postgres in CI, two browser suites (normal use and failure modes), production-build checks, and reading the server logs for unexpected errors.
+
 ## Tools I used
 
 - **Claude (Anthropic)** as an agentic coding assistant with a sandboxed shell. I used it to scaffold, write and run code, run tests, and drive a headless browser.
@@ -42,11 +49,15 @@ These are real issues caught during the build, not hypothetical ones:
 | `editor.setEditable(canEdit)` to follow role changes | The server logs during the browser test showed unexpected 403s and a 409: TipTap fires an update event on `setEditable`, so **merely opening a document triggered an autosave** | Pass `emitUpdate=false`, and guard autosave so a viewer can never schedule one. I now check the server log for unexpected 4xx/5xx after every browser run. |
 | Read-only switch after losing access | The new reliability test showed the "your edits were not saved" message was hidden as soon as the role flipped to viewer | Kept the status visible in that state |
 | `npm audit fix --force` (suggested by npm) | Would jump TipTap to v3 (breaking) in the last hours of the timebox | Applied only non-breaking fixes and documented the two remaining advisories with why they are not exploitable here |
+| `/api/users` listed every account for the share dialog | Fine with three seeded users, but once sign-up existed it meant **any new user could read every customer's name and email** | Suggestions are limited to people you already collaborate with (plus the public demo accounts in demo mode); a test signs up a stranger and checks they never appear |
+| Splitting a 750-line `app.js` into route modules | The test suite caught a regression introduced during the move: the history list limit had been tied to the retention cap, which hid the protected "Created" milestone | Kept the two limits separate and named them; refactors only land when the API and both browser suites pass |
+| Content-Security-Policy `script-src 'self'` | Playwright's `wait_for_function` relies on `eval`, which the policy blocks, so a test failed | Kept the strict policy; the failure-mode test now polls from Python and also fails if the app itself ever violates the policy |
+| `.env.example` documented, but nothing loaded `.env` | Noticed while writing the setup docs; following them would silently do nothing | `npm start` / `npm run dev` use Node's `--env-file-if-exists`, verified by changing a limit through `.env` |
 | Suggestion to store uploads as file attachments | Needs object storage, and Render's free disk is not persistent | Rejected. Uploads convert into editable content instead, which is the more useful product behavior. |
 
 ## How I verified correctness, UX quality and reliability
 
-- **Correctness:** 17 API integration tests (`npm test`) covering auth, the sharing permission matrix, persistence of formatting, 409 conflict handling, XSS sanitization, upload conversion, version history, presence, rate limiting and validation. **CI runs them on both SQLite and Postgres** on every push.
+- **Correctness:** 23 API integration tests (`npm test`) covering auth, the sharing permission matrix, persistence of formatting, 409 conflict handling, XSS sanitization, upload conversion, version history, presence, rate limiting and validation. **CI runs them on both SQLite and Postgres** on every push.
 - **Upgrade safety:** before shipping the second iteration, I started the *previous* release against a database, then ran the new release on top of it. This proved the migration and the history baseline on the same kind of data the live app has.
 - **UX:** an end-to-end Playwright run through the real UI with **two browsers open at once** (presence, live updates, restore propagating to the other user), plus manual review of screenshots (which caught loose list spacing and a toast message carrying over after sign-out, both fixed).
 - **Failure modes:** a second browser test (`e2e/reliability_test.py`) cuts the network mid-edit, revokes edit access while the user is typing, and expires the session, then checks that nothing is lost or overwritten.

@@ -29,7 +29,6 @@ export function sanitizeContent(html) {
 }
 
 export const SUPPORTED_EXTENSIONS = ['.txt', '.md', '.docx'];
-export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024; // 2 MB
 
 function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -45,15 +44,30 @@ function textToHtml(text) {
 
 export class UnsupportedFileError extends Error {}
 
-/** Convert an uploaded file buffer into { title, html }. */
+// Strip a UTF-8 byte-order mark (common in files saved by Windows editors),
+// which would otherwise show up as an invisible character at the start.
+const decodeText = (buffer) => buffer.toString('utf8').replace(/^\uFEFF/, '');
+
+/** Count content the editor cannot represent, so the user is told instead of it vanishing silently. */
+function unsupportedContent(html) {
+  const count = (re) => (html.match(re) || []).length;
+  const warnings = [];
+  const images = count(/<img\b/gi);
+  const tables = count(/<table\b/gi);
+  if (images) warnings.push(`${images} image${images > 1 ? 's' : ''} could not be imported`);
+  if (tables) warnings.push(`${tables} table${tables > 1 ? 's were' : ' was'} converted to plain text`);
+  return warnings;
+}
+
+/** Convert an uploaded file buffer into { title, html, warnings }. */
 export async function fileToHtml(originalName, buffer) {
   const ext = path.extname(originalName || '').toLowerCase();
   const title = path.basename(originalName || 'Untitled', ext).slice(0, 200) || 'Untitled';
   let html;
   if (ext === '.txt') {
-    html = textToHtml(buffer.toString('utf8'));
+    html = textToHtml(decodeText(buffer));
   } else if (ext === '.md') {
-    html = await marked.parse(buffer.toString('utf8'));
+    html = await marked.parse(decodeText(buffer));
   } else if (ext === '.docx') {
     try {
       html = (await mammoth.convertToHtml({ buffer })).value;
@@ -65,5 +79,5 @@ export async function fileToHtml(originalName, buffer) {
       `Unsupported file type "${ext || 'none'}". Supported: ${SUPPORTED_EXTENSIONS.join(', ')}`
     );
   }
-  return { title, html: sanitizeContent(html) };
+  return { title, html: sanitizeContent(html), warnings: unsupportedContent(html) };
 }

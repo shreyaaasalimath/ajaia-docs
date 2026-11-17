@@ -15,6 +15,14 @@ services:
         value: "22"
       - key: JWT_SECRET
         generateValue: true
+      # Demo accounts so reviewers can test sharing without signing up.
+      # For a real customer deployment set SEED_DEMO_DATA to "false".
+      - key: SEED_DEMO_DATA
+        value: "true"
+      - key: DEMO_PASSWORD
+        value: password123
+      - key: ALLOW_SIGNUP
+        value: "true"
       - key: DATABASE_URL
         fromDatabase:
           name: ajaia-docs-db

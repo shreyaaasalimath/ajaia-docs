@@ -57,7 +57,7 @@ export default function SharePanel({ docId, shares, onChange, onClose, notify })
       <form className="share-form" onSubmit={add}>
         <input
           type="email"
-          placeholder="teammate@ajaia.test"
+          placeholder="Teammate's email"
           list="share-users"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -94,7 +94,12 @@ export default function SharePanel({ docId, shares, onChange, onClose, notify })
           </li>
         ))}
       </ul>
-      {!shares.length && <p className="muted small">Not shared with anyone yet. Try bob@ajaia.test or carol@ajaia.test.</p>}
+      {!shares.length && (
+        <p className="muted small">
+          Not shared with anyone yet. Invite a teammate by the email they signed up with
+          {suggestions.length > 0 && <>, for example {suggestions.slice(0, 2).map((u) => u.email).join(' or ')}</>}.
+        </p>
+      )}
     </section>
   );
 }

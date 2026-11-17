@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import request from 'supertest';
 import { createDb } from '../db.js';
 import { createApp } from '../app.js';
-import { seed, DEMO_PASSWORD } from '../seed.js';
+import { seed, DEFAULT_DEMO_PASSWORD as DEMO_PASSWORD } from '../seed.js';
 
 let db;
 let app;
@@ -317,4 +317,107 @@ test('hardening: hashed assets are cached forever, index.html is revalidated, re
   const page = await request(served).get('/some/deep/link').expect(200);
   assert.equal(page.headers['cache-control'], 'no-cache');
   assert.match(page.text, /<div id="root">/);
+});
+
+test('import: unsupported content is reported, BOM is stripped', async () => {
+  const alice = await login('alice@ajaia.test');
+  const md = '\uFEFF# Report\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n![chart](https://example.com/c.png)\n';
+  const res = await alice.post('/api/documents/import').attach('file', Buffer.from(md), 'report.md').expect(201);
+  assert.match(res.body.document.content, /^<h1>Report<\/h1>/, 'no stray BOM before the heading');
+  assert.deepEqual(res.body.warnings, ['1 image could not be imported', '1 table was converted to plain text']);
+  const clean = await alice.post('/api/convert').attach('file', Buffer.from('plain'), 'a.txt').expect(200);
+  assert.deepEqual(clean.body.warnings, []);
+});
+
+test('version history: retention caps snapshots but always keeps milestones', async () => {
+  const small = createApp({ db, jwtSecret: 'test-secret', maxVersionsPerDoc: 3 });
+  const agent = request.agent(small);
+  await agent.post('/api/auth/login').send({ email: 'alice@ajaia.test', password: DEMO_PASSWORD }).expect(200);
+  const bob = request.agent(small);
+  await bob.post('/api/auth/login').send({ email: 'bob@ajaia.test', password: DEMO_PASSWORD }).expect(200);
+  const { body } = await agent.post('/api/documents').send({ title: 'Busy' }).expect(201);
+  const id = body.document.id;
+  await agent.post(`/api/documents/${id}/shares`).send({ email: 'bob@ajaia.test' }).expect(201);
+  // Alternate authors so each save starts a new snapshot.
+  let version = 1;
+  for (let i = 0; i < 6; i++) {
+    const who = i % 2 ? agent : bob;
+    const r = await who.patch(`/api/documents/${id}`).send({ content: `<p>${i}</p>`, version }).expect(200);
+    version = r.body.document.version;
+  }
+  const list = (await agent.get(`/api/documents/${id}/versions`).expect(200)).body.versions;
+  assert.equal(list.filter((v) => !v.note).length, 3, 'only the newest 3 regular snapshots remain');
+  assert.ok(list.some((v) => v.note === 'Created'), 'the Created milestone survives');
+  assert.equal(list[0].current, true);
+});
+
+test('security: content security policy forbids inline and third-party scripts', async () => {
+  const res = await request(app).get('/api/health').expect(200);
+  const csp = res.headers['content-security-policy'];
+  assert.match(csp, /script-src 'self'(;|$)/);
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(csp, /object-src 'none'/);
+});
+
+test('sign-up: creates an account with a starter doc and validates input', async () => {
+  const agent = request.agent(app);
+  const email = `new.user.${Date.now()}@example.com`;
+  const res = await agent.post('/api/auth/signup').send({ name: '  Dana   Lee ', email: email.toUpperCase(), password: 'longenough' }).expect(201);
+  assert.equal(res.body.user.name, 'Dana Lee');
+  assert.equal(res.body.user.email, email, 'email is normalized');
+  const docs = (await agent.get('/api/documents').expect(200)).body;
+  assert.deepEqual(docs.owned.map((d) => d.title), ['Getting started'], 'signed in, with a starter doc');
+
+  await request(app).post('/api/auth/signup').send({ name: 'Dup', email, password: 'longenough' }).expect(409);
+  await request(app).post('/api/auth/signup').send({ name: 'X', email: 'not-an-email', password: 'longenough' }).expect(400);
+  await request(app).post('/api/auth/signup').send({ name: 'X', email: `a${Date.now()}@b.co`, password: 'short' }).expect(400);
+  await request(app).post('/api/auth/signup').send({ name: '', email: `c${Date.now()}@b.co`, password: 'longenough' }).expect(400);
+
+  const closed = createApp({ db, jwtSecret: 'x', allowSignup: false });
+  await request(closed).post('/api/auth/signup').send({ name: 'Y', email: `y${Date.now()}@b.co`, password: 'longenough' }).expect(403);
+  assert.equal((await request(closed).get('/api/config')).body.allowSignup, false);
+});
+
+test('privacy: the share dialog only suggests people you already collaborate with', async () => {
+  const carol = await login('carol@ajaia.test');
+  const stranger = request.agent(app);
+  await stranger.post('/api/auth/signup').send({ name: 'Stranger', email: `s${Date.now()}@example.com`, password: 'longenough' }).expect(201);
+  const seen = (await stranger.get('/api/users').expect(200)).body.users;
+  assert.deepEqual(seen, [], 'a brand-new account cannot list other users');
+
+  const alice = await login('alice@ajaia.test');
+  const aliceSees = (await alice.get('/api/users').expect(200)).body.users.map((u) => u.email);
+  assert.ok(aliceSees.includes('bob@ajaia.test'), 'Alice collaborates with Bob');
+  assert.ok(!aliceSees.some((e) => e.startsWith('s') && e.endsWith('@example.com')), 'strangers are never listed');
+  assert.ok(Array.isArray((await carol.get('/api/users').expect(200)).body.users));
+});
+
+test('config: client settings come from the server, demo data and sign-up are switchable', async () => {
+  // Defaults (as in a real customer deployment): no demo accounts exposed.
+  const plain = await request(app).get('/api/config').expect(200);
+  assert.deepEqual(plain.body.demoAccounts, []);
+  assert.deepEqual(plain.body.supportedExtensions, ['.txt', '.md', '.docx']);
+
+  // Demo mode + custom limits are reflected to the client.
+  const demo = [{ email: 'bob@ajaia.test', name: 'Bob Teammate', hint: 'x', password: DEMO_PASSWORD }];
+  const tuned = createApp({ db, jwtSecret: 'test-secret', demoAccounts: demo, maxUploadBytes: 1024, minPasswordLength: 12, allowSignup: false });
+  const cfg = await request(tuned).get('/api/config').expect(200);
+  assert.equal(cfg.body.maxUploadBytes, 1024);
+  assert.equal(cfg.body.minPasswordLength, 12);
+  assert.equal(cfg.body.demoAccounts[0].email, 'bob@ajaia.test');
+
+  // Sign-up switched off is enforced by the server, not just hidden in the UI.
+  await request(tuned).post('/api/auth/signup').send({ name: 'X', email: 'x@example.com', password: 'longenough123' }).expect(403);
+
+  // The upload limit is enforced from config.
+  const agent = request.agent(tuned);
+  await agent.post('/api/auth/login').send({ email: 'alice@ajaia.test', password: DEMO_PASSWORD }).expect(200);
+  await agent.post('/api/convert').attach('file', Buffer.alloc(2048, 'a'), 'big.txt').expect(413);
+
+  // In demo mode the share dialog may suggest demo accounts, but never other real users.
+  const stranger = request.agent(app);
+  await stranger.post('/api/auth/signup').send({ name: 'Private Person', email: 'private@example.com', password: 'longenough123' }).expect(201);
+  const suggestions = (await agent.get('/api/users').expect(200)).body.users.map((u) => u.email);
+  assert.ok(suggestions.includes('bob@ajaia.test'));
+  assert.ok(!suggestions.includes('private@example.com'), 'real users are never exposed');
 });

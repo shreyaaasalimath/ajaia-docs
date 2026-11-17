@@ -39,6 +39,7 @@ const fileForm = (file) => {
 export const api = {
   me: () => request('GET', '/api/auth/me'),
   login: (email, password) => request('POST', '/api/auth/login', { email, password }),
+  signup: (name, email, password) => request('POST', '/api/auth/signup', { name, email, password }),
   logout: () => request('POST', '/api/auth/logout'),
   users: () => request('GET', '/api/users'),
   listDocs: () => request('GET', '/api/documents'),
@@ -58,14 +59,44 @@ export const api = {
   convertFile: (file) => request('POST', '/api/convert', fileForm(file)),
 };
 
-export const ACCEPTED_FILES = '.txt,.md,.docx';
-export const MAX_UPLOAD_MB = 2;
+// Server-provided settings (upload rules, sign-up, demo accounts). Loaded once at
+// startup so the client never duplicates limits that the server enforces.
+let serverConfig = {
+  supportedExtensions: ['.txt', '.md', '.docx'],
+  maxUploadBytes: 2 * 1024 * 1024,
+  allowSignup: false,
+  minPasswordLength: 8,
+  demoAccounts: [],
+};
+
+export async function loadServerConfig() {
+  try {
+    serverConfig = { ...serverConfig, ...(await request('GET', '/api/config')) };
+  } catch {
+    // Keep conservative defaults; the server still validates every upload.
+  }
+  return serverConfig;
+}
+
+export const getServerConfig = () => serverConfig;
+export const acceptedFiles = () => serverConfig.supportedExtensions.join(',');
+
+const formatList = (exts) =>
+  exts.length > 1 ? `${exts.slice(0, -1).join(', ')} or ${exts[exts.length - 1]}` : exts[0];
+const formatSize = (bytes) => `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
+
+/** Human-readable upload rule, e.g. ".txt, .md or .docx (max 2 MB)". */
+export const uploadRule = () =>
+  `${formatList(serverConfig.supportedExtensions)} (max ${formatSize(serverConfig.maxUploadBytes)})`;
 
 export function checkFile(file) {
-  const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
-  if (!ACCEPTED_FILES.split(',').includes(ext)) {
-    return `"${file.name}" is not supported. Use a .txt, .md or .docx file.`;
+  const dot = file.name.lastIndexOf('.');
+  const ext = dot >= 0 ? file.name.slice(dot).toLowerCase() : '';
+  if (!serverConfig.supportedExtensions.includes(ext)) {
+    return `"${file.name}" is not supported. Use a ${formatList(serverConfig.supportedExtensions)} file.`;
   }
-  if (file.size > MAX_UPLOAD_MB * 1024 * 1024) return `"${file.name}" is larger than ${MAX_UPLOAD_MB} MB.`;
+  if (file.size > serverConfig.maxUploadBytes) {
+    return `"${file.name}" is larger than ${formatSize(serverConfig.maxUploadBytes)}.`;
+  }
   return null;
 }

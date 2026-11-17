@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, checkFile, ACCEPTED_FILES } from './api.js';
+import { api, checkFile, acceptedFiles, uploadRule, loadServerConfig, getServerConfig } from './api.js';
 import Login from './Login.jsx';
 import DocumentEditor from './DocumentEditor.jsx';
 import { Avatar } from './usePresence.jsx';
@@ -48,7 +48,7 @@ export default function App() {
 
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 4000);
+    const t = setTimeout(() => setToast(null), toast.kind === 'info' ? 4000 : 7000);
     return () => clearTimeout(t);
   }, [toast]);
 
@@ -64,8 +64,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    api
-      .me()
+    // Server settings first (upload rules, sign-up, demo accounts), then the session.
+    loadServerConfig()
+      .then(() => api.me())
       .then((r) => setUser(r.user))
       .catch(() => setUser(null));
   }, []);
@@ -104,10 +105,15 @@ export default function App() {
     if (problem) return notify(problem, 'error');
     setBusy(true);
     try {
-      const { document } = await api.importFile(file);
+      const { document, warnings = [] } = await api.importFile(file);
       await refreshDocs();
       go(document.id);
-      notify(`Imported "${file.name}" as a new document`);
+      notify(
+        warnings.length
+          ? `Imported "${file.name}". Note: ${warnings.join('; ')}.`
+          : `Imported "${file.name}" as a new document`,
+        warnings.length ? 'warn' : 'info'
+      );
     } catch (err) {
       notify(err.message, 'error');
     } finally {
@@ -140,6 +146,7 @@ export default function App() {
   if (!user)
     return (
       <Login
+        config={getServerConfig()}
         notice={sessionNotice}
         onLogin={(u) => {
           setSessionNotice('');
@@ -181,11 +188,11 @@ export default function App() {
           <button className="btn primary" onClick={newDoc} disabled={busy}>
             <IconPlus /> New document
           </button>
-          <button className="btn" onClick={() => fileInput.current.click()} disabled={busy} title="Supported: .txt, .md, .docx (max 2 MB)">
+          <button className="btn" onClick={() => fileInput.current.click()} disabled={busy} title={`Supported: ${uploadRule()}`}>
             <IconUpload /> Import file
           </button>
-          <input ref={fileInput} type="file" accept={ACCEPTED_FILES} hidden onChange={onImport} />
-          <p className="hint">Import supports .txt, .md and .docx (max 2 MB)</p>
+          <input ref={fileInput} type="file" accept={acceptedFiles()} hidden onChange={onImport} />
+          <p className="hint">Import supports {uploadRule()}</p>
         </div>
 
         <div className="search">
@@ -256,7 +263,7 @@ export default function App() {
                   <IconPlus /> New document
                 </button>
                 <button className="btn" onClick={() => fileInput.current.click()} disabled={busy}>
-                  <IconUpload /> Import .txt, .md or .docx
+                  <IconUpload /> Import a file
                 </button>
               </div>
             </div>

@@ -1,8 +1,26 @@
 # Architecture Note
 
+> **In 30 seconds**
+> - **Stack:** React + TipTap editor, Node/Express API, Postgres in production (SQLite locally and in tests, same SQL), one deployable service on Render.
+> - **Prioritized:** the editing loop, sharing enforced on the server (owner / editor / viewer), file import that becomes editable content, and a live build reviewers can test.
+> - **Key tradeoff:** no real-time co-editing (CRDT). Instead: autosave with version checks (409 instead of silent overwrites), presence, and collaborators' saves pulled in live.
+> - **Cut on purpose:** comments, real-time cursors, email flows (verification, reset, invites), images and tables.
+> - **Known limits:** free-tier cold starts and 30-day database, in-memory presence (single instance), stateless sessions.
+
 ## What I optimized for
 
 The brief asks for depth in a few areas over shallow coverage of everything. I chose to make four things solid end to end: **the editing loop**, **sharing with real access rules**, **file import**, and **a deployment that a reviewer can actually test**. Everything else I either cut on purpose or kept small.
+
+## Order of work
+
+I built in tiers and only moved to the next tier once the previous one was tested end to end and deployed:
+
+1. **Core (the brief):** documents with rich text, autosave and reopen; file import; sharing with owner / editor / viewer enforced on the server; persistence; tests; live deployment.
+2. **Safety of the core:** conflict detection (409), sanitization, failure handling for saves (offline, revoked access, expired session), a browser test that simulates those failures.
+3. **Stretch that builds on the core:** version history (reuses the version counter), presence and live updates (reuses the version counter and the REST/auth path), outline, export, make a copy.
+4. **Production readiness:** configuration through environment variables, self-service sign-up, a private user directory, CI on two databases, security headers/CSP, caching, health checks.
+
+Each tier was a separate commit, so any tier could have been the submission.
 
 ## Shape of the system
 
@@ -12,6 +30,7 @@ Browser (React + TipTap)  ──JSON/HTTP──>  Express API  ──SQL──> 
         └── static client served by the same Node process (one deployable unit)
 ```
 
+- **Server layout.** `app.js` only wires middleware and routers. Endpoints live in `routes/` (auth, documents, sharing, uploads, versions, presence, system), and the rules shared between them (access control, snapshots, serialization) live in `services/documents.js`, so a permission rule exists in exactly one place.
 - **One service, one database.** The API also serves the built client, so there is one URL, no CORS, and same-site cookies just work. For this scope, a separate frontend host would add moving parts without adding value.
 - **Storage adapter (`server/db.js`).** All SQL uses portable types (TEXT ids, ISO timestamps) and `$1` placeholders. The SQLite adapter rewrites the placeholders. Reviewers can run the app locally with zero setup, and production gets a real managed database. The same test suite passes on both engines.
 
@@ -55,7 +74,7 @@ Each open editor sends a heartbeat every 4 s (15 s when the tab is hidden). The 
 |---|---|
 | True real-time co-editing (CRDT), remote cursors | Largest scope risk. Replaced with presence, live pull of saved changes, and conflict detection. |
 | Comments / suggestion mode | Valuable, but a feature-sized project. Version history and presence gave more collaboration value for the time. |
-| Sign-up, password reset, OAuth | Seeded accounts are enough to demonstrate access logic. |
+| Email verification, password reset, OAuth, inviting people who have no account yet | Need an email provider; sign-up with validation and rate limits covers the demo. Sharing tells the owner to ask the person to sign up first. |
 | Images, tables, fonts, colors | Kept the formatting set to what the brief asks for, done well. |
 | Storing uploaded files as attachments | Needs object storage. Converting to content is the more useful behavior here. |
 | Link-sharing / public docs, org-level permissions | Per-user roles cover the brief. |
@@ -66,6 +85,12 @@ Stretch items included: **version history**, **presence with live updates**, **o
 
 - Server: title required and at most 200 chars; content must be a string and at most 1 MB; role must be `viewer` or `editor`; unknown share email → 404; upload size, type and missing file → 413 / 415 / 400; malformed JSON → 400; unexpected errors → generic 500 (details only in server logs).
 - Client: file type and size checked before upload; empty title blocks saving with an inline message; every API error is surfaced as a toast or an inline message; the save status shows saved / saving / unsaved / failed / conflict.
+
+## Known operational limits
+
+- **Render free tier:** the server sleeps after ~15 minutes idle (first request can take 30–50 s), and the free Postgres database expires 30 days after creation. A paid instance or an external database (e.g. Neon) via `DATABASE_URL` removes both; no code change is needed.
+- **Presence is in memory**, so it is correct for one instance. Running several instances needs a shared store (Redis) or WebSockets with pub/sub.
+- **Sessions are stateless JWTs:** signing out clears the cookie, but a stolen token stays valid until it expires (`SESSION_DAYS`). A sessions table would allow server-side revocation.
 
 ## What I would do next with 2–4 more hours
 

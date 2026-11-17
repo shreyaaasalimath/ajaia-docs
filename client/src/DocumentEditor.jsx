@@ -4,7 +4,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import Placeholder from '@tiptap/extension-placeholder';
 import TurndownService from 'turndown';
-import { api, checkFile, ACCEPTED_FILES } from './api.js';
+import { api, checkFile, acceptedFiles, uploadRule } from './api.js';
 import Toolbar from './Toolbar.jsx';
 import SharePanel from './SharePanel.jsx';
 import HistoryPanel from './HistoryPanel.jsx';
@@ -342,9 +342,14 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onCopied, onD
     const problem = checkFile(file);
     if (problem) return notify(problem, 'error');
     try {
-      const { html } = await api.convertFile(file);
+      const { html, warnings = [] } = await api.convertFile(file);
       editor.chain().focus().insertContent(html).run();
-      notify(`Inserted content from "${file.name}"`);
+      notify(
+        warnings.length
+          ? `Inserted "${file.name}". Note: ${warnings.join('; ')}.`
+          : `Inserted content from "${file.name}"`,
+        warnings.length ? 'warn' : 'info'
+      );
     } catch (err) {
       notify(err.message, 'error');
     }
@@ -447,7 +452,7 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onCopied, onD
               {/* Close the menu after any action. */}
               <div className="menu-items" onClick={(e) => e.currentTarget.closest('details').removeAttribute('open')}>
                 <button onClick={makeCopy}><IconCopy /> Make a copy</button>
-                {canEdit && <button onClick={() => importInput.current.click()}><IconFileIn /> Insert from file (.txt, .md, .docx)</button>}
+                {canEdit && <button onClick={() => importInput.current.click()}><IconFileIn /> Insert from file ({uploadRule()})</button>}
                 <hr />
                 <button onClick={() => exportAs('md')}><IconDownload /> Download as Markdown</button>
                 <button onClick={() => exportAs('html')}><IconDownload /> Download as HTML</button>
@@ -460,7 +465,7 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onCopied, onD
                 )}
               </div>
             </details>
-            <input ref={importInput} type="file" accept={ACCEPTED_FILES} hidden onChange={insertFromFile} />
+            <input ref={importInput} type="file" accept={acceptedFiles()} hidden onChange={insertFromFile} />
           </div>
         </div>
         <div className="status-row">

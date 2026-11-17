@@ -7,13 +7,15 @@
 
 ## How to review in 3 minutes
 
-1. Open the live app. (On Render's free tier, the first load after idle can take about 30–50 s.)
+1. Open the live app. (On Render's free tier, the first load after idle can take about 30–50 s. The free database is valid for 30 days from deployment.)
 2. Sign in as **alice@ajaia.test** / `password123`. Open "Welcome to Ajaia Docs", edit and format text, and watch "All changes saved".
 3. Click **+ New document**, rename it, and use **Share** to share it with `bob@ajaia.test` as **Can view**.
 4. Sign out and sign in as **bob@ajaia.test**. Both documents appear under **Shared with me**. The new one is read-only, and the welcome doc is editable.
 5. Try **Import file** with a `.md`, `.txt` or `.docx` file.
 6. **Collaboration:** open the welcome doc as Alice in one browser and as Bob in an incognito window. Each sees the other's avatar. Type as Alice, and Bob's view updates within a few seconds.
 7. Open **History** to preview an earlier version and restore it. Open **Outline** to jump between headings.
+
+You can also create your own account with **Create an account** on the sign-in page.
 
 | Test account | Password | Notes |
 |---|---|---|
@@ -34,7 +36,7 @@
 | Screenshots | `docs/screenshots/` |
 | Automated tests | `server/test/api.test.js` (run `npm test`), `e2e/smoke_test.py` |
 | CI | `.github/workflows/ci.yml` (SQLite + Postgres matrix) |
-| Deployment config | `render.yaml` |
+| Deployment config | `render.yaml`, `.env.example` |
 
 ## Status
 
@@ -52,12 +54,12 @@
 - Make a copy of any document you can open
 - Production hardening: login rate limiting, security headers, in-place database migrations, database-aware health check, request-id logging, graceful shutdown
 - Resilient autosave: survives network drops and server restarts (automatic retry), handles access changes and expired sessions without losing or overwriting work
-- 17 passing API tests; **GitHub Actions CI runs them on SQLite and Postgres** plus the production build; two-browser Playwright smoke test and a failure-mode reliability test
+- 23 passing API tests; **GitHub Actions CI runs them on SQLite and Postgres** plus the production build; two-browser Playwright smoke test and a failure-mode reliability test
 
 **Incomplete / intentionally deprioritized**
 - No true simultaneous co-editing (CRDT). Saved changes appear live for others, but two people typing at the same moment get a clear "newer version" banner rather than merged keystrokes
 - No comments or suggestion mode
-- No sign-up or password reset (seeded accounts only)
+- No email verification, password reset or invitations for people without an account (sharing asks them to sign up first)
 - No images or tables in documents; uploaded files are converted into content, not stored as attachments
 
 **What I would build next with 2–4 hours:** true real-time co-editing with Yjs over WebSockets (with remote cursors), comments, a diff view between versions, frontend unit tests, and CSRF hardening. Details are in `ARCHITECTURE.md`.

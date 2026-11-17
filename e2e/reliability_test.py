@@ -3,14 +3,31 @@
 # Simulates what goes wrong in real use: losing the network mid-edit, having
 # access revoked while typing, the session expiring, plus small UX contracts.
 import os
+import time
 from playwright.sync_api import sync_playwright
 
 BASE = os.environ.get('BASE_URL', 'http://localhost:3001')
+# This test runs WITH the Content-Security-Policy enforced (the smoke test bypasses
+# it for Playwright's own helpers), so any violation by the app itself fails here.
+csp_violations = []
+
+
+def wait_until(page, check, timeout=10.0, what='condition'):
+    # Polls from Python instead of page.wait_for_function, which relies on eval
+    # and is blocked by the app's Content-Security-Policy (as it should be).
+    # page.wait_for_timeout (not time.sleep) lets Playwright process browser events.
+    end = time.time() + timeout
+    while time.time() < end:
+        if check():
+            return
+        page.wait_for_timeout(100)
+    raise AssertionError(f'timed out waiting for {what}')
 
 
 def login(browser, who):
     ctx = browser.new_context(viewport={'width': 1360, 'height': 860})
     page = ctx.new_page()
+    page.on('console', lambda m: 'Content Security Policy' in m.text and csp_violations.append(m.text))
     page.goto(BASE)
     page.wait_for_selector('.login-card')
     page.click(f'.demo-user:has-text("{who}")')
@@ -33,8 +50,9 @@ with sync_playwright() as p:
     # A fresh document shared with Bob as editor
     old = alice.url
     alice.click('.sidebar-actions button:has-text("New document")')
-    alice.wait_for_function('u => location.href !== u', arg=old)
-    alice.wait_for_function("document.querySelector('.title-input')?.value === 'Untitled document'")
+    wait_until(alice, lambda: alice.url != old, what='navigation to the new document')
+    wait_until(alice, lambda: alice.locator('.title-input').count() > 0
+               and alice.input_value('.title-input') == 'Untitled document', what='the new document to open')
     alice.fill('.title-input', 'Reliability')
     alice.wait_for_selector('.status.saved', timeout=5000)
     assert alice.title() == 'Reliability · Ajaia Docs', alice.title()
@@ -85,4 +103,6 @@ with sync_playwright() as p:
     print('expired session -> sign-in notice OK')
 
     browser.close()
+assert not csp_violations, csp_violations
+print('no CSP violations by the app OK')
 print('reliability: all checks passed')

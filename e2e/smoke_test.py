@@ -12,7 +12,7 @@ SS=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','docs','screensh
 errors=[]
 with sync_playwright() as p:
     b=p.chromium.launch()
-    ctx=b.new_context(viewport={'width':1360,'height':860})
+    ctx=b.new_context(viewport={'width':1360,'height':860}, bypass_csp=True)
     pg=ctx.new_page()
     pg.on('pageerror', lambda e: errors.append(str(e)))
     pg.on('console', lambda m: m.type=='error' and errors.append(m.text))
@@ -79,8 +79,8 @@ with sync_playwright() as p:
         page.click(f'.demo-user:has-text("{who}")'); page.click('button:has-text("Sign in")')
         page.wait_for_selector('.sidebar')
         return page
-    a = login(b.new_context(viewport={'width':1360,'height':860}), 'Alice')
-    bob = login(b.new_context(viewport={'width':1360,'height':860}), 'Bob')
+    a = login(b.new_context(viewport={'width':1360,'height':860}, bypass_csp=True), 'Alice')
+    bob = login(b.new_context(viewport={'width':1360,'height':860}, bypass_csp=True), 'Bob')
     a.click('.doc-link:has-text("Welcome")'); a.wait_for_selector('.ProseMirror h1')
     bob.click('.doc-link:has-text("Welcome")'); bob.wait_for_selector('.ProseMirror h1')
     a.wait_for_selector('.presence .avatar[title*="Bob"]', timeout=10000)
@@ -133,5 +133,21 @@ with sync_playwright() as p:
 
     a.goto(BASE + '/#/'); a.wait_for_selector('.doc-card')
     a.screenshot(path=SS+'00-home.png')
+
+    # Sign-up: a new person creates an account and starts with a guide document
+    import time
+    n = b.new_context(viewport={'width':1360,'height':860}, bypass_csp=True).new_page()
+    n.goto(BASE); n.wait_for_selector('.login-card')
+    n.click('button:has-text("Create an account")')
+    n.fill('input[autocomplete="name"]', 'Priya Sharma')
+    n.fill('input[type=email]', f'priya{int(time.time())}@example.com')
+    n.fill('input[type=password]', 'short')
+    n.click('button:has-text("Create account")')
+    assert n.locator('.sidebar').count() == 0, 'browser should block a too-short password'
+    n.fill('input[type=password]', 'a-strong-password')
+    n.click('button:has-text("Create account")'); n.wait_for_selector('.sidebar')
+    n.wait_for_selector('nav .doc-link:has-text("Getting started")')
+    n.screenshot(path=SS+'09-signup-home.png')
+    print('sign-up OK')
     b.close()
 print('console errors:', errors)

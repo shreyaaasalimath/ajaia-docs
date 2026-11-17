@@ -5,12 +5,12 @@
   "description": "Lightweight collaborative document editor (Ajaia take-home)",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
-    "dev": "concurrently -k -n api,web \"node --watch server/index.js\" \"vite client\"",
+    "dev": "concurrently -k -n api,web \"node --env-file-if-exists=.env --watch server/index.js\" \"vite client\"",
     "build": "vite build client",
-    "start": "node server/index.js",
+    "start": "node --env-file-if-exists=.env server/index.js",
     "test": "node --test server/test/*.test.js"
   },
   "dependencies": {

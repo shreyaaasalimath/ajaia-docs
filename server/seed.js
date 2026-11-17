@@ -1,13 +1,20 @@
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 
-export const DEMO_PASSWORD = 'password123';
+// Used only by tests and local development; deployments pass DEMO_PASSWORD via config.
+export const DEFAULT_DEMO_PASSWORD = 'password123';
 
+// Demo data for reviewers (disable with SEED_DEMO_DATA=false). `hint` is shown
+// on the sign-in page via /api/config, so the client holds no account list.
 export const DEMO_USERS = [
-  { email: 'alice@ajaia.test', name: 'Alice Owner' },
-  { email: 'bob@ajaia.test', name: 'Bob Teammate' },
-  { email: 'carol@ajaia.test', name: 'Carol Reviewer' },
+  { email: 'alice@ajaia.test', name: 'Alice Owner', hint: 'owns the welcome doc' },
+  { email: 'bob@ajaia.test', name: 'Bob Teammate', hint: 'has the welcome doc shared' },
+  { email: 'carol@ajaia.test', name: 'Carol Reviewer', hint: 'no access yet' },
 ];
+
+/** Public description of the demo accounts for the sign-in page. */
+export const demoAccounts = (password = DEFAULT_DEMO_PASSWORD) =>
+  DEMO_USERS.map(({ email, name, hint }) => ({ email, name, hint, password }));
 
 const WELCOME_HTML = `<h1>Welcome to Ajaia Docs</h1>
 <p>This document is owned by <strong>Alice</strong> and shared with <em>Bob</em> as an <u>editor</u>.</p>
@@ -16,8 +23,8 @@ const WELCOME_HTML = `<h1>Welcome to Ajaia Docs</h1>
 <ol><li>Log in as Alice and edit this doc</li><li>Log out, log in as Bob, and see it under "Shared with me"</li><li>Open the same doc as Alice and Bob in two browsers to see live presence and changes appear</li><li>Open <strong>History</strong> to preview and restore earlier versions</li></ol>`;
 
 // Idempotent: safe to run on every boot.
-export async function seed(db) {
-  const hash = bcrypt.hashSync(DEMO_PASSWORD, 10);
+export async function seed(db, { password = DEFAULT_DEMO_PASSWORD } = {}) {
+  const hash = bcrypt.hashSync(password, 10);
   const ids = {};
   for (const u of DEMO_USERS) {
     const existing = await db.query('SELECT id FROM users WHERE email = $1', [u.email]);
