@@ -1,0 +1,48 @@
+# AI-Native Workflow Note
+
+## Tools I used
+
+- **Claude (Anthropic)** as an agentic coding assistant with a sandboxed shell. I used it to scaffold, write and run code, run tests, and drive a headless browser.
+- **Playwright** (driven through the assistant) for browser-level verification and screenshots.
+- I did not use AI for product decisions without reviewing them. Scope, data model and access rules were decided up front and then implemented.
+
+## How I worked
+
+I treated the AI as a fast pair programmer working inside a tight loop: **decide → generate → run → inspect → correct**. I did not accept code because it looked right. I accepted it once it passed a test I could see.
+
+1. **Scoping first, without code.** I read the brief and committed to a slice: editing loop, sharing with real roles, file import, deployable build. I explicitly cut real-time collaboration, comments and auth flows (see `ARCHITECTURE.md`). I also fixed the stack early (React + TipTap, Express, Postgres/SQLite) so that generation stayed consistent.
+2. **Backend and tests before UI.** I had the API and integration tests generated together, so the access rules (owner / editor / viewer / stranger) were pinned down by tests before any UI existed.
+3. **UI, then real-browser verification.** After the build, I ran a Playwright script through the full flow: login, create, rename, format, autosave, reload, import, share, log in as the other user, confirm read-only. I also reviewed screenshots of each screen.
+4. **Production parity check.** I reproduced the exact Render build command in a clean folder and ran the app in production mode against a real Postgres 16 instance, then repeated the test suite and the browser flow there.
+
+## Where AI materially sped me up
+
+- **Boilerplate at volume:** Express routes, the fetch wrapper, the TipTap toolbar and the CSS. This is the work that would have taken most of the timebox by hand.
+- **Library glue:** mammoth (`.docx`), marked (`.md`), sanitize-html allowlists, TipTap extensions. The AI knew the APIs, which saved documentation lookups.
+- **Test writing:** the 7 API tests covering the sharing permission matrix were written in minutes, which let me spend more time on edge cases.
+- **Verification:** writing and rerunning the browser smoke test on every change was cheap enough that I did it repeatedly instead of once at the end.
+
+## What I changed or rejected
+
+These are real issues caught during the build, not hypothetical ones:
+
+| AI output | Problem found | What I did |
+|---|---|---|
+| SQLite adapter mapped `$1` → `?1` numbered params | All tests failed with `RangeError` from better-sqlite3 | Rewrote it to translate placeholders to positional `?` and reorder params, which also handles a placeholder used twice (`$5` for both timestamps) |
+| Deploy command `npm ci --omit=optional` (to skip SQLite in production) | Reproducing the build in a clean folder showed it also strips Rollup's native binary, so **the Vite build fails on Render** | Moved SQLite to `devDependencies` (which production installs skip) and kept the plain `npm ci` |
+| Postgres SSL turned on for any non-localhost host | Render's internal database hostname is private, so forcing SSL there is fragile | SSL now depends on the host (public hostnames on, private/internal off) with a `DATABASE_SSL` override |
+| Editor flushed pending changes on unmount by calling `editor.getHTML()` | The browser test showed that switching documents quickly could read from an editor that was already being destroyed | Kept the latest HTML in a ref on each update, and save reads from the ref. Added a "type and immediately switch documents" step to the smoke test. |
+| Save callback depended on `doc.title` | The callback identity changed after every rename, which re-ran effects and could trigger extra saves | Tracked the last-saved title in a ref so the save function stays stable |
+| Browser test typed into the editor right after clicking "New document" | It passed on SQLite but failed on Postgres: the test typed into the *previous* document before navigation finished | Fixed the test to wait for the route and the new document's title. A good reminder that a test passing once does not make it reliable. |
+| Suggestion to store uploads as file attachments | Needs object storage, and Render's free disk is not persistent | Rejected. Uploads convert into editable content instead, which is the more useful product behavior. |
+
+## How I verified correctness, UX quality and reliability
+
+- **Correctness:** 7 API integration tests (`npm test`) covering auth, the sharing permission matrix, persistence of formatting, 409 conflict handling, XSS sanitization, upload conversion and rejection, and validation. I ran them on **both SQLite and Postgres**.
+- **UX:** an end-to-end Playwright run through the real UI as two different users, plus manual review of screenshots (which caught loose list spacing and a toast message carrying over after sign-out, both fixed).
+- **Reliability:** reproduced the exact production build and ran it with `NODE_ENV=production` against Postgres before deploying, which caught the build-breaking dependency issue above.
+- **Security review:** I checked that permissions are enforced on the server and not only hidden in the UI (viewer PATCH → 403, stranger GET → 404), and that stored HTML is sanitized on every write.
+
+## Takeaway
+
+AI made it realistic to ship a tested, deployed full-stack slice in the timebox. The value I added was in scoping, in deciding what "correct" means (the permission matrix, conflict behavior, sanitization), and in refusing to trust output until it ran in conditions that match production. Most of the bugs above only appeared because I tested in a clean, production-like environment rather than trusting that generated code that looked right was right.

@@ -1,0 +1,143 @@
+// API tests: run against a fresh in-memory SQLite database per test file.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import request from 'supertest';
+import { createDb } from '../db.js';
+import { createApp } from '../app.js';
+import { seed, DEMO_PASSWORD } from '../seed.js';
+
+let db;
+let app;
+
+before(async () => {
+  db = await createDb({ sqliteFile: ':memory:' });
+  await seed(db);
+  app = createApp({ db, jwtSecret: 'test-secret' });
+});
+
+after(async () => db.close());
+
+async function login(email) {
+  const agent = request.agent(app);
+  const res = await agent.post('/api/auth/login').send({ email, password: DEMO_PASSWORD });
+  assert.equal(res.status, 200);
+  return agent;
+}
+
+test('rejects unauthenticated requests and bad credentials', async () => {
+  await request(app).get('/api/documents').expect(401);
+  await request(app)
+    .post('/api/auth/login')
+    .send({ email: 'alice@ajaia.test', password: 'wrong' })
+    .expect(401);
+});
+
+test('owner can create, rename, save and reopen a document with formatting preserved', async () => {
+  const alice = await login('alice@ajaia.test');
+  const created = await alice.post('/api/documents').send({ title: 'Plan' }).expect(201);
+  const { id, version } = created.body.document;
+
+  const html = '<h2>Goals</h2><p><strong>Bold</strong> <em>it</em> <u>under</u></p><ol><li>one</li></ol>';
+  const saved = await alice
+    .patch(`/api/documents/${id}`)
+    .send({ title: 'Q1 Plan', content: html, version })
+    .expect(200);
+  assert.equal(saved.body.document.version, version + 1);
+
+  const reopened = await alice.get(`/api/documents/${id}`).expect(200);
+  assert.equal(reopened.body.document.title, 'Q1 Plan');
+  assert.equal(reopened.body.document.content, html);
+  assert.equal(reopened.body.document.role, 'owner');
+});
+
+test('sharing: viewer can read but not edit, editor can edit, strangers get 404', async () => {
+  const alice = await login('alice@ajaia.test');
+  const bob = await login('bob@ajaia.test');
+  const carol = await login('carol@ajaia.test');
+
+  const { body } = await alice.post('/api/documents').send({ title: 'Private' }).expect(201);
+  const id = body.document.id;
+
+  // Before sharing, Bob cannot see it at all.
+  await bob.get(`/api/documents/${id}`).expect(404);
+
+  // Share as viewer -> read-only.
+  await alice.post(`/api/documents/${id}/shares`).send({ email: 'bob@ajaia.test', role: 'viewer' }).expect(201);
+  const asViewer = await bob.get(`/api/documents/${id}`).expect(200);
+  assert.equal(asViewer.body.document.role, 'viewer');
+  assert.equal(asViewer.body.document.shares, undefined, 'non-owners must not see the share list');
+  await bob.patch(`/api/documents/${id}`).send({ content: '<p>hi</p>', version: 1 }).expect(403);
+
+  // It shows up under "shared", not "owned".
+  const list = await bob.get('/api/documents').expect(200);
+  assert.ok(list.body.shared.some((d) => d.id === id && d.owner.email === 'alice@ajaia.test'));
+  assert.ok(!list.body.owned.some((d) => d.id === id));
+
+  // Upgrade to editor -> can edit; still cannot reshare or delete.
+  await alice.post(`/api/documents/${id}/shares`).send({ email: 'bob@ajaia.test', role: 'editor' }).expect(201);
+  await bob.patch(`/api/documents/${id}`).send({ content: '<p>hi</p>', version: 1 }).expect(200);
+  await bob.post(`/api/documents/${id}/shares`).send({ email: 'carol@ajaia.test' }).expect(403);
+  await bob.delete(`/api/documents/${id}`).expect(403);
+
+  // Carol was never invited.
+  await carol.get(`/api/documents/${id}`).expect(404);
+
+  // Revoke -> Bob loses access.
+  const bobId = (await bob.get('/api/auth/me')).body.user.id;
+  await alice.delete(`/api/documents/${id}/shares/${bobId}`).expect(200);
+  await bob.get(`/api/documents/${id}`).expect(404);
+});
+
+test('stale saves are rejected with 409 instead of overwriting', async () => {
+  const alice = await login('alice@ajaia.test');
+  const { body } = await alice.post('/api/documents').send({ title: 'Race' }).expect(201);
+  const { id, version } = body.document;
+  await alice.patch(`/api/documents/${id}`).send({ content: '<p>first</p>', version }).expect(200);
+  await alice.patch(`/api/documents/${id}`).send({ content: '<p>stale</p>', version }).expect(409);
+  const doc = await alice.get(`/api/documents/${id}`);
+  assert.equal(doc.body.document.content, '<p>first</p>');
+});
+
+test('stored content is sanitized (no scripts or event handlers)', async () => {
+  const alice = await login('alice@ajaia.test');
+  const { body } = await alice
+    .post('/api/documents')
+    .send({ title: 'XSS', content: '<p onclick="x()">ok</p><script>alert(1)</script><img src=x onerror=y>' })
+    .expect(201);
+  assert.equal(body.document.content, '<p>ok</p>');
+});
+
+test('upload: .md becomes a new editable document; unsupported types are rejected', async () => {
+  const alice = await login('alice@ajaia.test');
+  const md = '# Meeting notes\n\n- **Decision**: ship it\n- _Owner_: Alice\n';
+  const res = await alice
+    .post('/api/documents/import')
+    .attach('file', Buffer.from(md), 'meeting-notes.md')
+    .expect(201);
+  assert.equal(res.body.document.title, 'meeting-notes');
+  assert.match(res.body.document.content, /<h1>Meeting notes<\/h1>/);
+  assert.match(res.body.document.content, /<li><strong>Decision<\/strong>: ship it<\/li>/);
+
+  const txt = await alice
+    .post('/api/convert')
+    .attach('file', Buffer.from('line one\n\nline <two>'), 'notes.txt')
+    .expect(200);
+  assert.equal(txt.body.html, '<p>line one</p><p>line &lt;two&gt;</p>');
+
+  await alice.post('/api/documents/import').attach('file', Buffer.from('MZ'), 'virus.exe').expect(415);
+  await alice.post('/api/documents/import').expect(400);
+});
+
+test('validation: empty titles and invalid roles are rejected', async () => {
+  const alice = await login('alice@ajaia.test');
+  const { body } = await alice.post('/api/documents').send({ title: 'Valid' }).expect(201);
+  await alice.patch(`/api/documents/${body.document.id}`).send({ title: '   ', version: 1 }).expect(400);
+  await alice
+    .post(`/api/documents/${body.document.id}/shares`)
+    .send({ email: 'bob@ajaia.test', role: 'admin' })
+    .expect(400);
+  await alice
+    .post(`/api/documents/${body.document.id}/shares`)
+    .send({ email: 'nobody@ajaia.test' })
+    .expect(404);
+});
