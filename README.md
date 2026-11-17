@@ -21,7 +21,7 @@ The login page has one-click buttons for each account.
 
 | Area | What works |
 |---|---|
-| Documents | Create, rename (click the title), edit, delete (owner only), reopen from the sidebar |
+| Documents | Create, rename (click the title), edit, delete (owner only), **make a copy** (any collaborator gets their own copy), reopen from the sidebar or the recent-documents grid |
 | Rich text | Bold, italic, underline, strikethrough, Heading 1–3, bulleted and numbered lists, quote, code block, divider, undo/redo, keyboard shortcuts |
 | Saving | Autosave about 0.8 s after you stop typing, a visible save status, Ctrl/Cmd+S to save now, a warning before closing with unsaved changes |
 | File upload | **Import file** (sidebar) turns a `.txt`, `.md` or `.docx` file into a new document. **⋯ → Insert from file** adds a file's content into the open document. Maximum 2 MB. |
@@ -34,6 +34,7 @@ The login page has one-click buttons for each account.
 | Search | Filter documents in the sidebar (press `/` to focus) |
 | Export | Download as Markdown or HTML, Print / Save as PDF |
 | Safety | Server-side HTML sanitization, conflict detection (409) instead of silent overwrites, uniform 404 for documents you cannot access, login rate limiting, security headers |
+| Operations | `/api/health` checks the database (used by Render's health check), JSON access logs with a request id on every response, graceful shutdown on deploys |
 
 **Supported upload types:** `.txt`, `.md`, `.docx` only (max 2 MB). Other types are rejected with a clear message in both the UI and the API.
 
@@ -71,7 +72,7 @@ No database setup is needed locally. With no `DATABASE_URL` set, the server crea
 npm test
 ```
 
-This runs 11 API integration tests (Node's built-in test runner + supertest) against an in-memory SQLite database. Set `TEST_DATABASE_URL` to run the same suite against Postgres. They cover:
+This runs 13 API integration tests (Node's built-in test runner + supertest) against an in-memory SQLite database. Set `TEST_DATABASE_URL` to run the same suite against Postgres. They cover:
 
 - authentication (unauthenticated requests and wrong passwords are rejected)
 - create, rename, save and reopen with formatting preserved
@@ -83,6 +84,7 @@ This runs 11 API integration tests (Node's built-in test runner + supertest) aga
 - version history: grouping, milestones, preview, restore, a baseline for pre-history documents, and viewer restrictions
 - presence: who is in a document, live version reporting, leaving, and no access for strangers
 - login rate limiting and security headers
+- make a copy (ownership and isolation), health check (including database failure → 503) and request ids
 
 **CI:** GitHub Actions (`.github/workflows/ci.yml`) runs the suite on **both SQLite and Postgres 16**, plus the production build, on every push and pull request.
 

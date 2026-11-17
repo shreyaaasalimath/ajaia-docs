@@ -33,7 +33,7 @@ class HttpError extends Error {
 // Wrap async handlers so thrown errors reach the error middleware.
 const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 10 }) {
+export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 10, logRequests = false }) {
   const app = express();
   app.set('trust proxy', 1); // behind Render's proxy: use the real client IP
   app.disable('x-powered-by');
@@ -44,6 +44,29 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
       'Referrer-Policy': 'strict-origin-when-cross-origin',
       'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
     });
+    next();
+  });
+  // Request id (echoed to the client) + one access-log line per API request.
+  app.use((req, res, next) => {
+    req.id = req.get('x-request-id') || randomUUID();
+    res.set('X-Request-Id', req.id);
+    if (logRequests && req.path.startsWith('/api/')) {
+      const started = process.hrtime.bigint();
+      res.on('finish', () => {
+        const ms = Number(process.hrtime.bigint() - started) / 1e6;
+        console.log(
+          JSON.stringify({
+            t: new Date().toISOString(),
+            id: req.id,
+            method: req.method,
+            path: req.path,
+            status: res.statusCode,
+            ms: Math.round(ms),
+            user: req.user?.id,
+          })
+        );
+      });
+    }
     next();
   });
   app.use(express.json({ limit: '2mb' }));
@@ -340,6 +363,18 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
     })
   );
 
+  // Anyone who can open a document can make their own copy of it.
+  app.post(
+    '/api/documents/:id/copy',
+    requireUser,
+    h(async (req, res) => {
+      const { doc } = await loadDocWithRole(req.params.id, req.user.id);
+      const title = `Copy of ${doc.title}`.slice(0, MAX_TITLE);
+      const copy = await insertDoc(req.user.id, title, doc.content, `Copied from "${doc.title}"`.slice(0, 200));
+      res.status(201).json({ document: await serializeDoc(copy, 'owner') });
+    })
+  );
+
   // ---------- sharing ----------
   app.post(
     '/api/documents/:id/shares',
@@ -527,7 +562,19 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
     }
   );
 
-  app.get('/api/health', (_req, res) => res.json({ ok: true, db: db.kind }));
+  // Used by Render's health check: verifies the database, not just the process.
+  app.get(
+    '/api/health',
+    h(async (_req, res) => {
+      const started = Date.now();
+      try {
+        await db.query('SELECT 1 AS ok');
+        res.json({ ok: true, db: db.kind, dbLatencyMs: Date.now() - started, uptimeS: Math.round(process.uptime()) });
+      } catch {
+        res.status(503).json({ ok: false, db: db.kind, error: 'Database unavailable' });
+      }
+    })
+  );
   app.get('/api/config', (_req, res) =>
     res.json({ supportedExtensions: SUPPORTED_EXTENSIONS, maxUploadBytes: MAX_UPLOAD_BYTES })
   );
@@ -542,13 +589,15 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
 
   // ---------- errors ----------
   // eslint-disable-next-line no-unused-vars
-  app.use((err, _req, res, _next) => {
+  app.use((err, req, res, _next) => {
     if (err instanceof UnsupportedFileError) return res.status(415).json({ error: err.message });
     if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Request is too large' });
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON body' });
     const status = err.status || 500;
-    if (status >= 500) console.error(err);
-    res.status(status).json({ error: status >= 500 ? 'Something went wrong on our side' : err.message });
+    if (status >= 500) console.error(JSON.stringify({ id: req.id, error: err.message, stack: err.stack }));
+    res.status(status).json(
+      status >= 500 ? { error: 'Something went wrong on our side', requestId: req.id } : { error: err.message }
+    );
   });
 
   return app;

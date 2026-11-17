@@ -3,6 +3,7 @@ import { api, checkFile, ACCEPTED_FILES } from './api.js';
 import Login from './Login.jsx';
 import DocumentEditor from './DocumentEditor.jsx';
 import { Avatar } from './usePresence.jsx';
+import { IconPlus, IconUpload, IconSearch, IconDoc, IconUsers, IconLogout, IconLock } from './Icons.jsx';
 
 // Minimal hash router: "#/doc/<id>" opens a document, anything else is home.
 function useHashRoute() {
@@ -134,41 +135,50 @@ export default function App() {
   const DocLink = ({ d, shared }) => (
     <li>
       <a href={`#/doc/${d.id}`} className={d.id === docId ? 'doc-link active' : 'doc-link'}>
-        <span className="doc-title">{d.title}</span>
-        <span className="doc-meta">
-          {shared ? `${d.owner.name} · ${d.role === 'viewer' ? 'can view' : 'can edit'}` : timeAgo(d.updatedAt)}
+        <span className={`doc-icon ${shared ? 'shared' : ''}`}>{shared ? <IconUsers size={14} /> : <IconDoc size={14} />}</span>
+        <span className="doc-text">
+          <span className="doc-title">{d.title}</span>
+          <span className="doc-meta">
+            {shared ? `${d.owner.name} · ${d.role === 'viewer' ? 'can view' : 'can edit'}` : `Edited ${timeAgo(d.updatedAt)}`}
+          </span>
         </span>
       </a>
     </li>
   );
 
+  const recent = [...docs.owned.map((d) => ({ ...d, mine: true })), ...docs.shared]
+    .sort((x, y) => new Date(y.updatedAt) - new Date(x.updatedAt))
+    .slice(0, 6);
+
   return (
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
-          <span className="logo">A</span> Ajaia Docs
+          <span className="logo"><IconDoc size={16} /></span> Ajaia Docs
         </div>
         <div className="sidebar-actions">
           <button className="btn primary" onClick={newDoc} disabled={busy}>
-            + New document
+            <IconPlus /> New document
           </button>
           <button className="btn" onClick={() => fileInput.current.click()} disabled={busy} title="Supported: .txt, .md, .docx (max 2 MB)">
-            ⇪ Import file
+            <IconUpload /> Import file
           </button>
           <input ref={fileInput} type="file" accept={ACCEPTED_FILES} hidden onChange={onImport} />
           <p className="hint">Import supports .txt, .md and .docx (max 2 MB)</p>
         </div>
 
         <div className="search">
+          <IconSearch size={14} />
           <input
             ref={searchRef}
             type="search"
-            placeholder="Search documents   /"
+            placeholder="Search documents"
             aria-label="Search documents"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
           />
+          <kbd>/</kbd>
         </div>
 
         <nav>
@@ -192,8 +202,8 @@ export default function App() {
             <strong>{user.name}</strong>
             <div className="muted small">{user.email}</div>
           </div>
-          <button className="btn small" onClick={logout}>
-            Sign out
+          <button className="icon-btn" onClick={logout} title="Sign out" aria-label="Sign out">
+            <IconLogout />
           </button>
         </div>
       </aside>
@@ -205,6 +215,10 @@ export default function App() {
             docId={docId}
             currentUser={user}
             onChanged={refreshDocs}
+            onCopied={async (id) => {
+              await refreshDocs();
+              go(id);
+            }}
             onDeleted={() => {
               refreshDocs();
               go(null);
@@ -213,16 +227,45 @@ export default function App() {
           />
         ) : (
           <div className="home">
-            <h1>Hi {user.name.split(' ')[0]} 👋</h1>
-            <p className="muted">Pick a document on the left, create a new one, or import a file to get started.</p>
-            <div className="home-actions">
-              <button className="btn primary" onClick={newDoc} disabled={busy}>
-                + New document
-              </button>
-              <button className="btn" onClick={() => fileInput.current.click()} disabled={busy}>
-                ⇪ Import .txt / .md / .docx
-              </button>
+            <div className="home-hero">
+              <h1>Good to see you, {user.name.split(' ')[0]}</h1>
+              <p className="muted">Write, import and share documents with your team.</p>
+              <div className="home-actions">
+                <button className="btn primary" onClick={newDoc} disabled={busy}>
+                  <IconPlus /> New document
+                </button>
+                <button className="btn" onClick={() => fileInput.current.click()} disabled={busy}>
+                  <IconUpload /> Import .txt, .md or .docx
+                </button>
+              </div>
             </div>
+            {recent.length > 0 && (
+              <section className="recent">
+                <h2>Recent documents</h2>
+                <div className="card-grid">
+                  {recent.map((d) => (
+                    <a key={d.id} href={`#/doc/${d.id}`} className="doc-card">
+                      <div className="doc-card-preview">
+                        <span /><span /><span /><span />
+                      </div>
+                      <div className="doc-card-body">
+                        <div className="doc-card-title">{d.title}</div>
+                        <div className="doc-card-meta">
+                          {d.mine ? (
+                            <span className="tag">Owned by you</span>
+                          ) : (
+                            <span className={`tag ${d.role}`}>
+                              {d.role === 'viewer' && <IconLock size={11} />} {d.owner.name.split(' ')[0]} · {d.role === 'viewer' ? 'view' : 'edit'}
+                            </span>
+                          )}
+                          <span>{timeAgo(d.updatedAt)}</span>
+                        </div>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </section>
+            )}
           </div>
         )}
       </main>

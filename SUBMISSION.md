@@ -49,8 +49,9 @@
 - **Live presence:** see who is in a document and who is typing; collaborators' saves appear automatically without moving your cursor
 - **Outline** navigation, word count, reading time, "last edit by", sidebar search (`/`)
 - Export to Markdown / HTML, and Print → PDF
-- Production hardening: login rate limiting, security headers, in-place database migrations
-- 11 passing API tests; **GitHub Actions CI runs them on SQLite and Postgres** plus the production build; two-browser Playwright smoke test
+- Make a copy of any document you can open
+- Production hardening: login rate limiting, security headers, in-place database migrations, database-aware health check, request-id logging, graceful shutdown
+- 13 passing API tests; **GitHub Actions CI runs them on SQLite and Postgres** plus the production build; two-browser Playwright smoke test
 
 **Incomplete / intentionally deprioritized**
 - No true simultaneous co-editing (CRDT). Saved changes appear live for others, but two people typing at the same moment get a clear "newer version" banner rather than merged keystrokes

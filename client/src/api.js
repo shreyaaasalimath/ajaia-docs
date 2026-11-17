@@ -41,6 +41,7 @@ export const api = {
   createDoc: (title) => request('POST', '/api/documents', { title }),
   getDoc: (id) => request('GET', `/api/documents/${id}`),
   updateDoc: (id, patch) => request('PATCH', `/api/documents/${id}`, patch),
+  copyDoc: (id) => request('POST', `/api/documents/${id}/copy`),
   deleteDoc: (id) => request('DELETE', `/api/documents/${id}`),
   share: (id, email, role) => request('POST', `/api/documents/${id}/shares`, { email, role }),
   unshare: (id, userId) => request('DELETE', `/api/documents/${id}/shares/${userId}`),

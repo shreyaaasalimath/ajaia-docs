@@ -10,6 +10,9 @@ import SharePanel from './SharePanel.jsx';
 import HistoryPanel from './HistoryPanel.jsx';
 import OutlinePanel from './OutlinePanel.jsx';
 import { usePresence, Avatar } from './usePresence.jsx';
+import {
+  IconOutline, IconHistory, IconShare, IconMore, IconCopy, IconTrash, IconDownload, IconPrint, IconFileIn, IconLock,
+} from './Icons.jsx';
 
 const SAVE_DELAY_MS = 800;
 
@@ -64,7 +67,7 @@ function countWords(text) {
   return m ? m.length : 0;
 }
 
-function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onDeleted, notify }) {
+function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onCopied, onDeleted, notify }) {
   const [doc, setDoc] = useState(initialDoc);
   const [title, setTitle] = useState(initialDoc.title);
   const [status, setStatus] = useState('saved');
@@ -264,6 +267,17 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onDeleted, no
     }
   }
 
+  async function makeCopy() {
+    try {
+      if (dirtyRef.current) await save(); // copy what the user sees, not the last autosave
+      const { document } = await api.copyDoc(docId);
+      notify(`Created "${document.title}"`);
+      onCopied(document.id);
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
+
   async function remove() {
     if (!window.confirm(`Delete "${doc.title}"? This cannot be undone.`)) return;
     try {
@@ -325,7 +339,7 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onDeleted, no
               onClick={() => setPanel((p) => (p === 'outline' ? null : 'outline'))}
               title="Outline"
             >
-              ☰ Outline
+              <IconOutline /> <span className="lbl">Outline</span>
             </button>
             {canEdit && (
               <button
@@ -333,26 +347,34 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onDeleted, no
                 onClick={() => setPanel((p) => (p === 'history' ? null : 'history'))}
                 title="Version history"
               >
-                ⟲ History
+                <IconHistory /> <span className="lbl">History</span>
               </button>
             )}
             {isOwner ? (
               <button className="btn primary" onClick={() => setShowShare((s) => !s)}>
-                Share{doc.shares?.length ? ` · ${doc.shares.length}` : ''}
+                <IconShare /> Share{doc.shares?.length ? ` · ${doc.shares.length}` : ''}
               </button>
             ) : (
               <span className={`badge ${doc.role}`}>
-                {doc.role === 'viewer' ? 'View only' : 'Can edit'} · shared by {doc.owner.name}
+                {doc.role === 'viewer' && <IconLock size={12} />} {doc.role === 'viewer' ? 'View only' : 'Can edit'} · shared by {doc.owner.name}
               </span>
             )}
             <details className="menu">
-              <summary className="btn">⋯</summary>
-              <div className="menu-items">
-                {canEdit && <button onClick={() => importInput.current.click()}>Insert from file (.txt, .md, .docx)</button>}
-                <button onClick={() => exportAs('md')}>Download as Markdown</button>
-                <button onClick={() => exportAs('html')}>Download as HTML</button>
-                <button onClick={() => window.print()}>Print / Save as PDF</button>
-                {isOwner && <button className="danger" onClick={remove}>Delete document</button>}
+              <summary className="icon-btn" aria-label="More actions"><IconMore /></summary>
+              {/* Close the menu after any action. */}
+              <div className="menu-items" onClick={(e) => e.currentTarget.closest('details').removeAttribute('open')}>
+                <button onClick={makeCopy}><IconCopy /> Make a copy</button>
+                {canEdit && <button onClick={() => importInput.current.click()}><IconFileIn /> Insert from file (.txt, .md, .docx)</button>}
+                <hr />
+                <button onClick={() => exportAs('md')}><IconDownload /> Download as Markdown</button>
+                <button onClick={() => exportAs('html')}><IconDownload /> Download as HTML</button>
+                <button onClick={() => window.print()}><IconPrint /> Print / Save as PDF</button>
+                {isOwner && (
+                  <>
+                    <hr />
+                    <button className="danger" onClick={remove}><IconTrash /> Delete document</button>
+                  </>
+                )}
               </div>
             </details>
             <input ref={importInput} type="file" accept={ACCEPTED_FILES} hidden onChange={insertFromFile} />
@@ -360,7 +382,7 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onDeleted, no
         </div>
         <div className="status-row">
           {canEdit ? (
-            <span className={`status ${status}`}>
+            <span className={`status ${status}`} role="status" aria-live="polite">
               {STATUS_LABEL[status]}
               {status === 'conflict' && (
                 <button

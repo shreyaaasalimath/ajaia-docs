@@ -234,3 +234,34 @@ test('version history: documents created before history get a restorable baselin
   const preview = await alice.get(`/api/documents/${id}/versions/${baseline.id}`).expect(200);
   assert.equal(preview.body.version.content, '<p>original</p>');
 });
+
+test('make a copy: any collaborator gets their own copy as owner', async () => {
+  const alice = await login('alice@ajaia.test');
+  const bob = await login('bob@ajaia.test');
+  const carol = await login('carol@ajaia.test');
+  const { body } = await alice.post('/api/documents').send({ title: 'Template', content: '<h1>Plan</h1>' }).expect(201);
+  const id = body.document.id;
+  await alice.post(`/api/documents/${id}/shares`).send({ email: 'bob@ajaia.test', role: 'viewer' }).expect(201);
+
+  const copy = await bob.post(`/api/documents/${id}/copy`).expect(201);
+  assert.equal(copy.body.document.title, 'Copy of Template');
+  assert.equal(copy.body.document.role, 'owner');
+  assert.equal(copy.body.document.content, '<h1>Plan</h1>');
+  // The copy is Bob's alone: editable by him, invisible to Alice.
+  await bob.patch(`/api/documents/${copy.body.document.id}`).send({ content: '<p>mine</p>', version: 1 }).expect(200);
+  await alice.get(`/api/documents/${copy.body.document.id}`).expect(404);
+  await carol.post(`/api/documents/${id}/copy`).expect(404);
+});
+
+test('ops: health checks the database and every response carries a request id', async () => {
+  const res = await request(app).get('/api/health').expect(200);
+  assert.equal(res.body.ok, true);
+  assert.ok(Number.isInteger(res.body.dbLatencyMs));
+  assert.match(res.headers['x-request-id'], /^[0-9a-f-]{36}$/);
+  const echoed = await request(app).get('/api/health').set('X-Request-Id', 'trace-123');
+  assert.equal(echoed.headers['x-request-id'], 'trace-123');
+
+  const broken = createApp({ db: { kind: 'test', query: async () => { throw new Error('down'); } }, jwtSecret: 'x' });
+  const down = await request(broken).get('/api/health').expect(503);
+  assert.equal(down.body.ok, false);
+});

@@ -24,7 +24,7 @@ with sync_playwright() as p:
     pg.screenshot(path=SS+'02-editor-owner.png')
     # new doc, rename, format
     old=pg.url
-    pg.click('.sidebar >> text=+ New document'); pg.wait_for_function('u => location.href !== u', arg=old)
+    pg.click('.sidebar-actions button:has-text("New document")'); pg.wait_for_function('u => location.href !== u', arg=old)
     pg.wait_for_function("document.querySelector('.title-input')?.value === 'Untitled document'")
     pg.fill('.title-input','Q1 Launch Plan')
     ed=pg.locator('.ProseMirror'); ed.click()
@@ -49,7 +49,7 @@ with sync_playwright() as p:
     open(os.path.join(os.environ.get('TMPDIR','/tmp'),'notes.md'),'w').write('# Imported Notes\n\n- **one**\n- two\n\nSome *text*.')
     pg.set_input_files('.sidebar input[type=file]',os.path.join(os.environ.get('TMPDIR','/tmp'),'notes.md')); pg.wait_for_selector('.ProseMirror h1:has-text("Imported Notes")')
     print('import OK', pg.input_value('.title-input'))
-    pg.click('button:has-text("Sign out")'); pg.wait_for_selector('.login-card')
+    pg.click('button[aria-label="Sign out"]'); pg.wait_for_selector('.login-card')
     # bob
     pg.click('.demo-user:has-text("Bob")'); pg.click('button:has-text("Sign in")'); pg.wait_for_selector('.sidebar')
     pg.wait_for_selector('nav >> text=Q1 Launch Plan')
@@ -123,5 +123,15 @@ with sync_playwright() as p:
     assert a.locator('nav .doc-link').count() == 1, a.locator('nav .doc-link').all_inner_texts()
     a.fill('.search input', '')
     print('search OK')
+
+    # Make a copy (from the ⋯ menu) opens a new doc owned by the current user
+    old = a.url
+    a.click('summary[aria-label="More actions"]'); a.click('.menu-items button:has-text("Make a copy")')
+    a.wait_for_function('u => location.href !== u', arg=old)
+    a.wait_for_function("document.querySelector('.title-input')?.value === 'Copy of Welcome to Ajaia Docs'")
+    print('make a copy OK')
+
+    a.goto(BASE + '/#/'); a.wait_for_selector('.doc-card')
+    a.screenshot(path=SS+'00-home.png')
     b.close()
 print('console errors:', errors)

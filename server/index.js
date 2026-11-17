@@ -23,8 +23,27 @@ const app = createApp({
   db,
   jwtSecret: JWT_SECRET,
   clientDist: path.resolve(__dirname, '..', 'client', 'dist'),
+  logRequests: process.env.NODE_ENV === 'production' || process.env.LOG_REQUESTS === 'true',
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Ajaia Docs running on http://localhost:${PORT} (storage: ${db.kind})`);
 });
+
+// Graceful shutdown: Render sends SIGTERM on every deploy. Stop accepting new
+// connections, let in-flight saves finish, then close the database pool.
+let shuttingDown = false;
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`${signal} received: finishing in-flight requests…`);
+    const force = setTimeout(() => process.exit(1), 10_000);
+    force.unref();
+    server.close(async () => {
+      await db.close().catch(() => {});
+      console.log('Shutdown complete');
+      process.exit(0);
+    });
+  });
+}

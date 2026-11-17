@@ -1,4 +1,7 @@
 import { useEffect, useReducer } from 'react';
+import {
+  IconUndo, IconRedo, IconBulletList, IconNumberList, IconQuote, IconCode, IconDivider, IconStrike,
+} from './Icons.jsx';
 
 // Re-render on selection/transaction so active states stay accurate.
 function useEditorTick(editor) {
@@ -40,8 +43,8 @@ export default function Toolbar({ editor }) {
 
   return (
     <div className="toolbar" role="toolbar" aria-label="Formatting">
-      {btn('↶', 'Undo (Ctrl+Z)', false, () => chain().undo().run(), !editor.can().undo())}
-      {btn('↷', 'Redo (Ctrl+Shift+Z)', false, () => chain().redo().run(), !editor.can().redo())}
+      {btn(<IconUndo />, 'Undo (Ctrl+Z)', false, () => chain().undo().run(), !editor.can().undo())}
+      {btn(<IconRedo />, 'Redo (Ctrl+Shift+Z)', false, () => chain().redo().run(), !editor.can().redo())}
       <span className="sep" />
       <select
         className="tool-select"
@@ -62,13 +65,13 @@ export default function Toolbar({ editor }) {
       {btn(<b>B</b>, 'Bold (Ctrl+B)', editor.isActive('bold'), () => chain().toggleBold().run())}
       {btn(<i>I</i>, 'Italic (Ctrl+I)', editor.isActive('italic'), () => chain().toggleItalic().run())}
       {btn(<u>U</u>, 'Underline (Ctrl+U)', editor.isActive('underline'), () => chain().toggleUnderline().run())}
-      {btn(<s>S</s>, 'Strikethrough', editor.isActive('strike'), () => chain().toggleStrike().run())}
+      {btn(<IconStrike />, 'Strikethrough', editor.isActive('strike'), () => chain().toggleStrike().run())}
       <span className="sep" />
-      {btn('• List', 'Bulleted list', editor.isActive('bulletList'), () => chain().toggleBulletList().run())}
-      {btn('1. List', 'Numbered list', editor.isActive('orderedList'), () => chain().toggleOrderedList().run())}
-      {btn('❝', 'Quote', editor.isActive('blockquote'), () => chain().toggleBlockquote().run())}
-      {btn('</>', 'Code block', editor.isActive('codeBlock'), () => chain().toggleCodeBlock().run())}
-      {btn('—', 'Divider', false, () => chain().setHorizontalRule().run())}
+      {btn(<IconBulletList />, 'Bulleted list', editor.isActive('bulletList'), () => chain().toggleBulletList().run())}
+      {btn(<IconNumberList />, 'Numbered list', editor.isActive('orderedList'), () => chain().toggleOrderedList().run())}
+      {btn(<IconQuote />, 'Quote', editor.isActive('blockquote'), () => chain().toggleBlockquote().run())}
+      {btn(<IconCode />, 'Code block', editor.isActive('codeBlock'), () => chain().toggleCodeBlock().run())}
+      {btn(<IconDivider />, 'Divider', false, () => chain().setHorizontalRule().run())}
     </div>
   );
 }

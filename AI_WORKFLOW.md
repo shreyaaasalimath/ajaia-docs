@@ -42,7 +42,7 @@ These are real issues caught during the build, not hypothetical ones:
 
 ## How I verified correctness, UX quality and reliability
 
-- **Correctness:** 11 API integration tests (`npm test`) covering auth, the sharing permission matrix, persistence of formatting, 409 conflict handling, XSS sanitization, upload conversion, version history, presence, rate limiting and validation. **CI runs them on both SQLite and Postgres** on every push.
+- **Correctness:** 13 API integration tests (`npm test`) covering auth, the sharing permission matrix, persistence of formatting, 409 conflict handling, XSS sanitization, upload conversion, version history, presence, rate limiting and validation. **CI runs them on both SQLite and Postgres** on every push.
 - **Upgrade safety:** before shipping the second iteration, I started the *previous* release against a database, then ran the new release on top of it. This proved the migration and the history baseline on the same kind of data the live app has.
 - **UX:** an end-to-end Playwright run through the real UI with **two browsers open at once** (presence, live updates, restore propagating to the other user), plus manual review of screenshots (which caught loose list spacing and a toast message carrying over after sign-out, both fixed).
 - **Reliability:** reproduced the exact production build and ran it with `NODE_ENV=production` against Postgres before deploying, which caught the build-breaking dependency issue above.
