@@ -70,5 +70,58 @@ with sync_playwright() as p:
     pg.wait_for_timeout(500); pg.reload(); pg.wait_for_selector('.ProseMirror h1')
     assert 'QUICKSWITCH' in pg.inner_text('.ProseMirror'), 'pending edit lost on switch'
     print('flush-on-switch OK')
+
+    # ---- Two browsers on the same doc: presence, live updates, history, outline, search ----
+    def login(ctx, who):
+        page = ctx.new_page()
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        page.goto(BASE); page.wait_for_selector('.login-card')
+        page.click(f'.demo-user:has-text("{who}")'); page.click('button:has-text("Sign in")')
+        page.wait_for_selector('.sidebar')
+        return page
+    a = login(b.new_context(viewport={'width':1360,'height':860}), 'Alice')
+    bob = login(b.new_context(viewport={'width':1360,'height':860}), 'Bob')
+    a.click('.doc-link:has-text("Welcome")'); a.wait_for_selector('.ProseMirror h1')
+    bob.click('.doc-link:has-text("Welcome")'); bob.wait_for_selector('.ProseMirror h1')
+    a.wait_for_selector('.presence .avatar[title*="Bob"]', timeout=10000)
+    bob.wait_for_selector('.presence .avatar[title*="Alice"]', timeout=10000)
+    print('presence OK')
+
+    a.locator('.ProseMirror').click()
+    # Put the caret at the very end of the document (keyboard End only reaches the visual line end).
+    a.evaluate("""() => { const el = document.querySelector('.ProseMirror').lastElementChild;
+      const last = el.querySelector('li:last-child') || el; const r = document.createRange();
+      r.selectNodeContents(last); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }""")
+    a.wait_for_timeout(100); a.keyboard.press('Enter'); a.keyboard.press('Enter')
+    a.select_option('.tool-select','h2'); a.keyboard.type('Live update from Alice')
+    a.wait_for_selector('.status.saved', timeout=5000)
+    bob.wait_for_selector('.ProseMirror h2:has-text("Live update from Alice")', timeout=12000)
+    a.screenshot(path=SS+'06-presence-alice.png')
+    print('live update OK')
+
+    # Outline lists headings, including the new one
+    a.click('button:has-text("Outline")'); a.wait_for_selector('.outline-list button:has-text("Live update from Alice")')
+    a.screenshot(path=SS+'07-outline.png')
+    a.click('button:has-text("Outline")')
+    print('outline OK')
+
+    # History: preview the original and restore it
+    a.click('button:has-text("History")'); a.wait_for_selector('.version-list .version')
+    a.click('.version-list li:last-child .version')  # oldest entry: "Created" or "Original version"; a.wait_for_selector('.preview-body h1')
+    a.wait_for_selector('.preview-head button:not([disabled])'); a.wait_for_timeout(300)
+    a.screenshot(path=SS+'08-history.png')
+    a.once('dialog', lambda d: d.accept())
+    a.click('button:has-text("Restore this version")')
+    a.wait_for_selector('.version-list .version:has-text("Restored")', timeout=8000)
+    assert 'Live update from Alice' not in a.inner_text('.ProseMirror'), 'restore did not apply'
+    bob.wait_for_function("!document.querySelector('.ProseMirror').innerText.includes('Live update from Alice')", timeout=12000)
+    print('history restore OK (and propagated to Bob)')
+
+    # Search filters the sidebar
+    a.keyboard.press('Escape'); a.locator('.page').click(position={'x':5,'y':5})
+    a.fill('.search input', 'launch')
+    assert a.locator('nav .doc-link').count() == 1, a.locator('nav .doc-link').all_inner_texts()
+    a.fill('.search input', '')
+    print('search OK')
     b.close()
 print('console errors:', errors)

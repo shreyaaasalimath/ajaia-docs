@@ -1,6 +1,8 @@
 # Ajaia Docs
 
-A lightweight collaborative document editor: create and edit rich-text documents, import files, and share documents with teammates as editors or viewers.
+[![CI](https://github.com/shreyaaasalimath/ajaia-docs/actions/workflows/ci.yml/badge.svg)](https://github.com/shreyaaasalimath/ajaia-docs/actions/workflows/ci.yml)
+
+A lightweight collaborative document editor: create and edit rich-text documents, import files, share with teammates as editors or viewers, see who else is in a document, receive their changes live, and roll back to any earlier version.
 
 **Live app:** `<LIVE_URL>`
 **Demo accounts** (password for all: `password123`):
@@ -25,8 +27,13 @@ The login page has one-click buttons for each account.
 | File upload | **Import file** (sidebar) turns a `.txt`, `.md` or `.docx` file into a new document. **⋯ → Insert from file** adds a file's content into the open document. Maximum 2 MB. |
 | Sharing | Owner shares by email as **Can edit** or **Can view**, can change roles and remove access. The sidebar separates **My documents** from **Shared with me**. Viewers get a read-only editor. |
 | Persistence | Postgres in production, SQLite locally. Formatting is stored as sanitized HTML. |
-| Export (stretch) | Download as Markdown or HTML, Print / Save as PDF |
-| Safety | Server-side HTML sanitization, conflict detection (409) instead of silent overwrites, uniform 404 for documents you cannot access |
+| **Version history** | **History** panel lists snapshots (who and when), previews any version read-only, and restores it in one click. Restores are themselves versions, so they can be undone. Autosaves by the same person within 5 minutes are grouped into one entry. |
+| **Live presence** | Avatars show who else has the document open (a green ring means they are typing). When a collaborator saves, your view updates automatically **without moving your cursor**. If you have unsaved edits, you get a banner instead of being overwritten. |
+| **Outline** | **Outline** panel builds a live table of contents from your headings. Click to jump. |
+| Writing stats | Live word count, reading time, and "last edit by" in the status bar |
+| Search | Filter documents in the sidebar (press `/` to focus) |
+| Export | Download as Markdown or HTML, Print / Save as PDF |
+| Safety | Server-side HTML sanitization, conflict detection (409) instead of silent overwrites, uniform 404 for documents you cannot access, login rate limiting, security headers |
 
 **Supported upload types:** `.txt`, `.md`, `.docx` only (max 2 MB). Other types are rejected with a clear message in both the UI and the API.
 
@@ -64,7 +71,7 @@ No database setup is needed locally. With no `DATABASE_URL` set, the server crea
 npm test
 ```
 
-This runs 7 API integration tests (Node's built-in test runner + supertest) against an in-memory SQLite database. They cover:
+This runs 11 API integration tests (Node's built-in test runner + supertest) against an in-memory SQLite database. Set `TEST_DATABASE_URL` to run the same suite against Postgres. They cover:
 
 - authentication (unauthenticated requests and wrong passwords are rejected)
 - create, rename, save and reopen with formatting preserved
@@ -73,10 +80,13 @@ This runs 7 API integration tests (Node's built-in test runner + supertest) agai
 - XSS sanitization of stored content
 - `.md` / `.txt` import, plus rejection of unsupported or missing files
 - validation of titles, roles and unknown users
+- version history: grouping, milestones, preview, restore, a baseline for pre-history documents, and viewer restrictions
+- presence: who is in a document, live version reporting, leaving, and no access for strangers
+- login rate limiting and security headers
 
-I also ran the same suite against Postgres 16 to confirm the SQL works on both engines.
+**CI:** GitHub Actions (`.github/workflows/ci.yml`) runs the suite on **both SQLite and Postgres 16**, plus the production build, on every push and pull request.
 
-**Browser smoke test** (optional, Playwright, needs a fresh database): `python e2e/smoke_test.py` while the app is running. It covers the full UI flow, including switching documents right after typing.
+**Browser smoke test** (optional, Playwright, needs a fresh database): `python e2e/smoke_test.py` while the app is running. It drives two browsers at once (Alice and Bob) through the full flow: editing, persistence, import, sharing, read-only mode, presence, live updates, outline, history restore and search.
 
 ## Deploy (Render, free)
 
@@ -91,18 +101,22 @@ The repo includes a `render.yaml` Blueprint with one free web service and one fr
 ```
 server/
   index.js        boot: DB, seed, start HTTP server
-  app.js          Express app: auth, documents, sharing, upload, errors
-  db.js           storage adapter (Postgres or SQLite, same SQL)
+  app.js          Express app: auth, documents, sharing, upload, history, presence, errors
+  db.js           storage adapter (Postgres or SQLite, same SQL) + additive migrations
   content.js      HTML sanitization + .txt/.md/.docx → HTML conversion
   seed.js         demo users and the welcome document
   test/           API integration tests
 client/src/
   App.jsx         layout, sidebar (owned vs shared), routing, import
-  DocumentEditor.jsx  TipTap editor, autosave, conflicts, export
+  DocumentEditor.jsx  TipTap editor, autosave, conflicts, live updates, export
+  HistoryPanel.jsx    version list, preview, restore
+  OutlinePanel.jsx    heading navigation
+  usePresence.jsx     presence heartbeat hook + avatars
   Toolbar.jsx     formatting toolbar
   SharePanel.jsx  share, change role, revoke
   Login.jsx       login with demo accounts
-e2e/smoke_test.py browser smoke test
+e2e/smoke_test.py browser smoke test (two users)
+.github/workflows/ci.yml  CI: tests on SQLite + Postgres, production build
 docs/screenshots/ screenshots of the main flows
 ```
 

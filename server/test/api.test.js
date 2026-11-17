@@ -10,7 +10,10 @@ let db;
 let app;
 
 before(async () => {
-  db = await createDb({ sqliteFile: ':memory:' });
+  // Set TEST_DATABASE_URL to run the same suite against Postgres (as CI does).
+  db = await createDb(
+    process.env.TEST_DATABASE_URL?.trim() ? { databaseUrl: process.env.TEST_DATABASE_URL } : { sqliteFile: ':memory:' }
+  );
   await seed(db);
   app = createApp({ db, jwtSecret: 'test-secret' });
 });
@@ -140,4 +143,94 @@ test('validation: empty titles and invalid roles are rejected', async () => {
     .post(`/api/documents/${body.document.id}/shares`)
     .send({ email: 'nobody@ajaia.test' })
     .expect(404);
+});
+
+test('version history: edits are snapshotted, previewable and restorable', async () => {
+  const alice = await login('alice@ajaia.test');
+  const bob = await login('bob@ajaia.test');
+  const { body } = await alice.post('/api/documents').send({ title: 'History', content: '<p>v1</p>' }).expect(201);
+  const id = body.document.id;
+
+  // Same-author autosaves within the session window fold into one entry.
+  await alice.patch(`/api/documents/${id}`).send({ content: '<p>v2</p>', version: 1 }).expect(200);
+  await alice.patch(`/api/documents/${id}`).send({ content: '<p>v3</p>', version: 2 }).expect(200);
+  let list = (await alice.get(`/api/documents/${id}/versions`).expect(200)).body.versions;
+  assert.equal(list.length, 2, 'creation milestone + one editing session');
+  assert.equal(list[1].note, 'Created');
+
+  // A different author starts a new entry.
+  await alice.post(`/api/documents/${id}/shares`).send({ email: 'bob@ajaia.test', role: 'editor' }).expect(201);
+  const bobSave = await bob.patch(`/api/documents/${id}`).send({ content: '<p>bob</p>', version: 3 }).expect(200);
+  assert.equal(bobSave.body.document.updatedBy.name, 'Bob Teammate');
+  list = (await alice.get(`/api/documents/${id}/versions`).expect(200)).body.versions;
+  assert.equal(list.length, 3);
+  assert.equal(list[0].author, 'Bob Teammate');
+
+  // Preview and restore the original.
+  const created = list.find((v) => v.note === 'Created');
+  const preview = await alice.get(`/api/documents/${id}/versions/${created.id}`).expect(200);
+  assert.equal(preview.body.version.content, '<p>v1</p>');
+  const restored = await alice.post(`/api/documents/${id}/versions/${created.id}/restore`).expect(200);
+  assert.equal(restored.body.document.content, '<p>v1</p>');
+  list = (await alice.get(`/api/documents/${id}/versions`).expect(200)).body.versions;
+  assert.match(list[0].note, /^Restored version from/);
+
+  // Viewers cannot see or restore history.
+  await alice.post(`/api/documents/${id}/shares`).send({ email: 'bob@ajaia.test', role: 'viewer' }).expect(201);
+  await bob.get(`/api/documents/${id}/versions`).expect(403);
+  await bob.post(`/api/documents/${id}/versions/${created.id}/restore`).expect(403);
+});
+
+test('presence: collaborators see each other and the latest saved version', async () => {
+  const alice = await login('alice@ajaia.test');
+  const bob = await login('bob@ajaia.test');
+  const carol = await login('carol@ajaia.test');
+  const { body } = await alice.post('/api/documents').send({ title: 'Live' }).expect(201);
+  const id = body.document.id;
+  await alice.post(`/api/documents/${id}/shares`).send({ email: 'bob@ajaia.test', role: 'editor' }).expect(201);
+
+  await alice.post(`/api/documents/${id}/presence`).send({ editing: true }).expect(200);
+  const seen = await bob.post(`/api/documents/${id}/presence`).send({ editing: false }).expect(200);
+  assert.deepEqual(seen.body.viewers.map((v) => [v.name, v.editing]), [['Alice Owner', true]]);
+  assert.equal(seen.body.version, 1);
+
+  await alice.patch(`/api/documents/${id}`).send({ content: '<p>new</p>', version: 1 }).expect(200);
+  const after = await bob.post(`/api/documents/${id}/presence`).send({}).expect(200);
+  assert.equal(after.body.version, 2);
+  assert.equal(after.body.updatedBy.name, 'Alice Owner');
+
+  // Leaving removes you; strangers cannot probe presence.
+  await alice.delete(`/api/documents/${id}/presence`).expect(204);
+  assert.equal((await bob.post(`/api/documents/${id}/presence`).send({})).body.viewers.length, 0);
+  await carol.post(`/api/documents/${id}/presence`).send({}).expect(404);
+});
+
+test('security: failed logins are rate limited and security headers are set', async () => {
+  const limited = createApp({ db, jwtSecret: 'test-secret', loginAttemptsPerWindow: 3 });
+  for (let i = 0; i < 3; i++) {
+    await request(limited).post('/api/auth/login').send({ email: 'alice@ajaia.test', password: 'nope' }).expect(401);
+  }
+  const blocked = await request(limited)
+    .post('/api/auth/login')
+    .send({ email: 'alice@ajaia.test', password: 'nope' })
+    .expect(429);
+  assert.match(blocked.body.error, /Too many/);
+
+  const res = await request(app).get('/api/health').expect(200);
+  assert.equal(res.headers['x-content-type-options'], 'nosniff');
+  assert.equal(res.headers['x-frame-options'], 'DENY');
+  assert.equal(res.headers['x-powered-by'], undefined);
+});
+
+test('version history: documents created before history get a restorable baseline', async () => {
+  const alice = await login('alice@ajaia.test');
+  const { body } = await alice.post('/api/documents').send({ title: 'Legacy', content: '<p>original</p>' }).expect(201);
+  const id = body.document.id;
+  await db.query('DELETE FROM document_versions WHERE document_id = $1', [id]); // simulate a pre-history doc
+  await alice.patch(`/api/documents/${id}`).send({ content: '<p>edited</p>', version: 1 }).expect(200);
+  const list = (await alice.get(`/api/documents/${id}/versions`).expect(200)).body.versions;
+  const baseline = list.find((v) => v.note === 'Original version');
+  assert.ok(baseline, 'baseline snapshot exists');
+  const preview = await alice.get(`/api/documents/${id}/versions/${baseline.id}`).expect(200);
+  assert.equal(preview.body.version.content, '<p>original</p>');
 });

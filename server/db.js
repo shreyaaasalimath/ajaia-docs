@@ -32,6 +32,17 @@ const SCHEMA = [
      created_at TEXT NOT NULL,
      PRIMARY KEY (document_id, user_id)
    )`,
+  `CREATE TABLE IF NOT EXISTS document_versions (
+     id TEXT PRIMARY KEY,
+     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+     title TEXT NOT NULL,
+     content TEXT NOT NULL,
+     author_id TEXT NOT NULL REFERENCES users(id),
+     note TEXT,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_versions_doc ON document_versions(document_id, updated_at)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_owner ON documents(owner_id)`,
   `CREATE INDEX IF NOT EXISTS idx_shares_user ON document_shares(user_id)`,
 ];
@@ -92,5 +103,22 @@ export async function createDb({ databaseUrl, sqliteFile } = {}) {
     ? createPg(databaseUrl)
     : createSqlite(sqliteFile || path.resolve('data', 'ajaia.db'));
   for (const stmt of SCHEMA) await db.query(stmt);
+  await runMigrations(db);
   return db;
+}
+
+// Additive migrations for databases created by earlier versions of the app.
+// Each step is idempotent: "already exists" errors are expected and ignored.
+const MIGRATIONS = [
+  'ALTER TABLE documents ADD COLUMN updated_by TEXT REFERENCES users(id)',
+];
+
+async function runMigrations(db) {
+  for (const stmt of MIGRATIONS) {
+    try {
+      await db.query(stmt);
+    } catch (err) {
+      if (!/duplicate column|already exists/i.test(err.message)) throw err;
+    }
+  }
 }

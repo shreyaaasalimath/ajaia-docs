@@ -44,6 +44,11 @@ export const api = {
   deleteDoc: (id) => request('DELETE', `/api/documents/${id}`),
   share: (id, email, role) => request('POST', `/api/documents/${id}/shares`, { email, role }),
   unshare: (id, userId) => request('DELETE', `/api/documents/${id}/shares/${userId}`),
+  versions: (id) => request('GET', `/api/documents/${id}/versions`),
+  version: (id, vid) => request('GET', `/api/documents/${id}/versions/${vid}`),
+  restoreVersion: (id, vid) => request('POST', `/api/documents/${id}/versions/${vid}/restore`),
+  presence: (id, editing) => request('POST', `/api/documents/${id}/presence`, { editing }),
+  leavePresence: (id) => request('DELETE', `/api/documents/${id}/presence`),
   importFile: (file) => request('POST', '/api/documents/import', fileForm(file)),
   convertFile: (file) => request('POST', '/api/convert', fileForm(file)),
 };

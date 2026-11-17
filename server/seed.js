@@ -13,7 +13,7 @@ const WELCOME_HTML = `<h1>Welcome to Ajaia Docs</h1>
 <p>This document is owned by <strong>Alice</strong> and shared with <em>Bob</em> as an <u>editor</u>.</p>
 <h2>Try it out</h2>
 <ul><li>Format text with the toolbar or keyboard shortcuts (Ctrl/Cmd + B, I, U)</li><li>Import a .txt, .md or .docx file</li><li>Share a document with another seeded user</li></ul>
-<ol><li>Log in as Alice and edit this doc</li><li>Log out, log in as Bob, and see it under "Shared with me"</li></ol>`;
+<ol><li>Log in as Alice and edit this doc</li><li>Log out, log in as Bob, and see it under "Shared with me"</li><li>Open the same doc as Alice and Bob in two browsers to see live presence and changes appear</li><li>Open <strong>History</strong> to preview and restore earlier versions</li></ol>`;
 
 // Idempotent: safe to run on every boot.
 export async function seed(db) {
@@ -41,9 +41,14 @@ export async function seed(db) {
     const now = new Date().toISOString();
     const docId = randomUUID();
     await db.query(
-      `INSERT INTO documents (id, owner_id, title, content, version, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 1, $5, $5)`,
+      `INSERT INTO documents (id, owner_id, title, content, version, created_at, updated_at, updated_by)
+       VALUES ($1, $2, $3, $4, 1, $5, $5, $2)`,
       [docId, alice, 'Welcome to Ajaia Docs', WELCOME_HTML, now]
+    );
+    await db.query(
+      `INSERT INTO document_versions (id, document_id, title, content, author_id, note, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 'Created', $6, $6)`,
+      [randomUUID(), docId, 'Welcome to Ajaia Docs', WELCOME_HTML, alice, now]
     );
     await db.query(
       `INSERT INTO document_shares (document_id, user_id, role, created_at) VALUES ($1, $2, 'editor', $3)`,

@@ -7,6 +7,9 @@ import TurndownService from 'turndown';
 import { api, checkFile, ACCEPTED_FILES } from './api.js';
 import Toolbar from './Toolbar.jsx';
 import SharePanel from './SharePanel.jsx';
+import HistoryPanel from './HistoryPanel.jsx';
+import OutlinePanel from './OutlinePanel.jsx';
+import { usePresence, Avatar } from './usePresence.jsx';
 
 const SAVE_DELAY_MS = 800;
 
@@ -15,7 +18,7 @@ const STATUS_LABEL = {
   unsaved: 'Unsaved changes…',
   saving: 'Saving…',
   error: 'Save failed. Retrying when you keep typing',
-  conflict: 'Someone else changed this doc. Reload to continue',
+  conflict: 'Someone else saved a newer version',
   invalid: 'Title cannot be empty',
 };
 
@@ -56,11 +59,21 @@ function download(filename, text, type) {
   URL.revokeObjectURL(url);
 }
 
-function LoadedEditor({ docId, initialDoc, onChanged, onDeleted, notify }) {
+function countWords(text) {
+  const m = text.trim().match(/\S+/g);
+  return m ? m.length : 0;
+}
+
+function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onDeleted, notify }) {
   const [doc, setDoc] = useState(initialDoc);
   const [title, setTitle] = useState(initialDoc.title);
   const [status, setStatus] = useState('saved');
   const [showShare, setShowShare] = useState(false);
+  const [panel, setPanel] = useState(null); // 'outline' | 'history' | null
+  const [historyKey, setHistoryKey] = useState(0);
+  const [remoteNotice, setRemoteNotice] = useState(null);
+  const [words, setWords] = useState(0);
+  const focusedRef = useRef(false);
   const canEdit = doc.role === 'owner' || doc.role === 'editor';
   const isOwner = doc.role === 'owner';
 
@@ -97,6 +110,7 @@ function LoadedEditor({ docId, initialDoc, onChanged, onDeleted, notify }) {
       savedTitleRef.current = document.title;
       setDoc((d) => ({ ...d, title: document.title, updatedAt: document.updatedAt }));
       setStatus(dirtyRef.current ? 'unsaved' : 'saved');
+      setHistoryKey((k) => k + 1);
       if (titleChanged) onChanged();
     } catch (e) {
       if (e.status === 409) {
@@ -128,9 +142,83 @@ function LoadedEditor({ docId, initialDoc, onChanged, onDeleted, notify }) {
     ],
     content: initialDoc.content,
     editable: canEdit,
+    onCreate: ({ editor: ed }) => setWords(countWords(ed.getText())),
     onUpdate: ({ editor: ed }) => {
       htmlRef.current = ed.getHTML();
+      setWords(countWords(ed.getText()));
       scheduleSave();
+    },
+    onFocus: () => (focusedRef.current = true),
+    onBlur: () => (focusedRef.current = false),
+  });
+
+  // Replace local state with a server copy (remote change, restore, or conflict recovery).
+  const applyDocument = useCallback(
+    (document) => {
+      const titleChanged = document.title !== savedTitleRef.current;
+      versionRef.current = document.version;
+      savedTitleRef.current = document.title;
+      titleRef.current = document.title;
+      htmlRef.current = document.content;
+      dirtyRef.current = false;
+      blockedRef.current = false;
+      setTitle(document.title);
+      setDoc((d) => ({ ...d, title: document.title, updatedAt: document.updatedAt, updatedBy: document.updatedBy }));
+      setStatus('saved');
+      setRemoteNotice(null);
+      setHistoryKey((k) => k + 1);
+      if (editor && !editor.isDestroyed) {
+        const before = editor.state.doc;
+        const { from, to } = editor.state.selection;
+        editor.commands.setContent(document.content, false); // false: do not trigger autosave
+        const after = editor.state.doc;
+        // Keep the cursor where the user had it: positions before the changed
+        // region stay put, positions after it shift by the size difference.
+        const start = before.content.findDiffStart(after.content);
+        const end = start == null ? null : before.content.findDiffEnd(after.content);
+        const map = (pos) => {
+          if (start == null || pos <= start) return pos;
+          if (end && pos >= end.a) return pos + (end.b - end.a);
+          return end ? end.b : pos; // cursor was inside the changed text
+        };
+        const max = after.content.size;
+        try {
+          editor.commands.setTextSelection({ from: Math.min(map(from), max), to: Math.min(map(to), max) });
+        } catch {
+          /* position not valid in the new document: keep the default cursor */
+        }
+        setWords(countWords(editor.getText()));
+      }
+      if (titleChanged) onChanged();
+    },
+    [editor, onChanged]
+  );
+
+  const loadLatest = useCallback(async () => {
+    try {
+      const { document } = await api.getDoc(docId);
+      applyDocument(document);
+      onChanged();
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }, [docId, applyDocument, onChanged, notify]);
+
+  // Live presence + pulling in collaborators' saves.
+  const viewers = usePresence(docId, {
+    isEditing: () => canEdit && focusedRef.current,
+    onServerState: async (state) => {
+      if (state.version <= versionRef.current) return;
+      if (state.updatedBy?.id === currentUser.id) return; // our own in-flight save
+      const who = state.updatedBy?.name || 'A collaborator';
+      if (dirtyRef.current || savingRef.current || blockedRef.current) {
+        setRemoteNotice(who); // do not clobber local edits; let the user decide
+        return;
+      }
+      const { document } = await api.getDoc(docId);
+      if (dirtyRef.current || savingRef.current) return setRemoteNotice(who);
+      applyDocument(document);
+      notify(`${who} updated this document`);
     },
   });
 
@@ -218,6 +306,36 @@ function LoadedEditor({ docId, initialDoc, onChanged, onDeleted, notify }) {
             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
           />
           <div className="header-actions">
+            {viewers.length > 0 && (
+              <div className="presence" aria-label="People viewing this document">
+                {viewers.slice(0, 4).map((v) => (
+                  <Avatar
+                    key={v.id}
+                    name={v.name}
+                    email={v.email}
+                    ring={v.editing}
+                    title={`${v.name} is ${v.editing ? 'editing' : 'viewing'}`}
+                  />
+                ))}
+                {viewers.length > 4 && <span className="avatar more">+{viewers.length - 4}</span>}
+              </div>
+            )}
+            <button
+              className={`btn ghost ${panel === 'outline' ? 'on' : ''}`}
+              onClick={() => setPanel((p) => (p === 'outline' ? null : 'outline'))}
+              title="Outline"
+            >
+              ☰ Outline
+            </button>
+            {canEdit && (
+              <button
+                className={`btn ghost ${panel === 'history' ? 'on' : ''}`}
+                onClick={() => setPanel((p) => (p === 'history' ? null : 'history'))}
+                title="Version history"
+              >
+                ⟲ History
+              </button>
+            )}
             {isOwner ? (
               <button className="btn primary" onClick={() => setShowShare((s) => !s)}>
                 Share{doc.shares?.length ? ` · ${doc.shares.length}` : ''}
@@ -245,13 +363,25 @@ function LoadedEditor({ docId, initialDoc, onChanged, onDeleted, notify }) {
             <span className={`status ${status}`}>
               {STATUS_LABEL[status]}
               {status === 'conflict' && (
-                <button className="link" onClick={() => window.location.reload()}>Reload</button>
+                <button
+                  className="link"
+                  onClick={() =>
+                    window.confirm('Load the latest version? Your unsaved changes in this tab will be discarded.') &&
+                    loadLatest()
+                  }
+                >
+                  Load latest
+                </button>
               )}
             </span>
           ) : (
             <span className="status">You have view-only access. Ask {doc.owner.name} for edit access.</span>
           )}
-          <span className="muted small">Owner: {isOwner ? 'You' : `${doc.owner.name} (${doc.owner.email})`}</span>
+          <span className="muted small">
+            {words.toLocaleString()} {words === 1 ? 'word' : 'words'} · {Math.max(1, Math.round(words / 200))} min read
+            {doc.updatedBy && ` · Last edit by ${doc.updatedBy.id === currentUser.id ? 'you' : doc.updatedBy.name}`}
+            {' · '}Owner: {isOwner ? 'You' : doc.owner.name}
+          </span>
         </div>
         {canEdit && <Toolbar editor={editor} />}
       </header>
@@ -266,10 +396,41 @@ function LoadedEditor({ docId, initialDoc, onChanged, onDeleted, notify }) {
         />
       )}
 
-      <div className="page-scroll">
-        <div className="page">
-          <EditorContent editor={editor} />
+      {remoteNotice && (
+        <div className="banner" role="status">
+          <span>
+            <strong>{remoteNotice}</strong> saved a newer version while you were editing.
+          </span>
+          <button
+            className="btn small"
+            onClick={() =>
+              window.confirm('Load their version? Your unsaved changes in this tab will be discarded.') && loadLatest()
+            }
+          >
+            Load their version
+          </button>
         </div>
+      )}
+
+      <div className="editor-body">
+        <div className="page-scroll">
+          <div className="page">
+            <EditorContent editor={editor} />
+          </div>
+        </div>
+        {panel === 'outline' && <OutlinePanel editor={editor} onClose={() => setPanel(null)} />}
+        {panel === 'history' && canEdit && (
+          <HistoryPanel
+            docId={docId}
+            refreshKey={historyKey}
+            beforeRestore={async () => {
+              if (dirtyRef.current) await save();
+            }}
+            onRestored={applyDocument}
+            onClose={() => setPanel(null)}
+            notify={notify}
+          />
+        )}
       </div>
     </div>
   );

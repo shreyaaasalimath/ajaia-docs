@@ -32,18 +32,26 @@ This is real enough to demonstrate ownership and sharing across accounts (passwo
 **5. File upload as a product feature, not a storage feature.**
 Uploads convert into editable content (`.txt` → paragraphs, `.md` → marked, `.docx` → mammoth). You can create a new document from a file or insert a file into the current draft. Files are processed in memory and not stored, which avoids file storage, which the free hosting tier does not persist anyway. Limits are explicit: 2 MB, three extensions, with a 415 error and a UI message for anything else.
 
+**6. Version history as grouped snapshots.**
+A `document_versions` table stores full snapshots (documents are small, so full copies are simpler and safer than diffs). Saving every autosave would bury useful history under hundreds of entries, so autosaves by the same author within 5 minutes update the latest snapshot, much like an "editing session" in Google Docs. Milestones (Created, Imported, Restored) are never modified, so they can always be restored exactly. Restoring writes a *new* version instead of deleting history, which makes restores undoable. Documents created before history existed get a baseline snapshot before their first change, so upgrading the live database loses nothing.
+
+**7. Presence and live updates over polling, not WebSockets.**
+Each open editor sends a heartbeat every 4 s (15 s when the tab is hidden). The response lists who else is present and the document's current version. If a collaborator saved and you have no unsaved edits, the client pulls the new content and **maps your cursor through the change** using ProseMirror's `findDiffStart`/`findDiffEnd`, so text inserted above you does not make your cursor jump. If you do have unsaved edits, you get a banner instead of being overwritten. Polling was a deliberate choice: it works through every proxy and on a free host that sleeps, it reuses the existing REST and auth path, and it gives "near real-time" with very little code. Presence is kept in memory, which is correct for a single instance. Scaling out would move it to Redis or replace it with a WebSocket channel.
+
+**8. Production hardening.** Additive, idempotent migrations at boot (the live database was upgraded in place); failed-login rate limiting; security headers (`nosniff`, `DENY` framing, referrer policy); `trust proxy` for real client IPs behind Render; and CI that runs every test on both database engines plus the production build.
+
 ## What I deliberately did not build
 
 | Cut | Why |
 |---|---|
-| Real-time co-editing, cursors, presence | Largest scope risk. Replaced with conflict detection. |
-| Comments / suggestion mode, version history | Valuable, but each is a feature-sized project. Not needed to prove the core loop. |
+| True real-time co-editing (CRDT), remote cursors | Largest scope risk. Replaced with presence, live pull of saved changes, and conflict detection. |
+| Comments / suggestion mode | Valuable, but a feature-sized project. Version history and presence gave more collaboration value for the time. |
 | Sign-up, password reset, OAuth | Seeded accounts are enough to demonstrate access logic. |
 | Images, tables, fonts, colors | Kept the formatting set to what the brief asks for, done well. |
 | Storing uploaded files as attachments | Needs object storage. Converting to content is the more useful behavior here. |
 | Link-sharing / public docs, org-level permissions | Per-user roles cover the brief. |
 
-Small stretch item included: **export to Markdown / HTML and Print → PDF**. These are all client-side, cheap, and useful.
+Stretch items included: **version history**, **presence with live updates**, **outline**, and **export to Markdown / HTML / PDF**.
 
 ## Validation and error handling
 
@@ -52,8 +60,8 @@ Small stretch item included: **export to Markdown / HTML and Print → PDF**. Th
 
 ## What I would do next with 2–4 more hours
 
-1. **Real-time collaboration** with Yjs + TipTap's collaboration extension over WebSockets (I have WebSocket experience from CrisisIQ). The version column becomes a snapshot checkpoint.
-2. **Version history**: write a row to `document_versions` on each save and add a restore button. This is cheap given the existing version counter.
-3. **Comments** anchored to text ranges.
-4. **Frontend tests** (Vitest + Testing Library) for the save state machine, plus Playwright in CI.
-5. Rate limiting on login and upload, CSRF token for state-changing requests, and structured logging.
+1. **True real-time co-editing** with Yjs + TipTap's collaboration extension over WebSockets, including remote cursors (I have WebSocket experience from CrisisIQ). The presence endpoint and version snapshots already provide the surrounding pieces.
+2. **Comments** anchored to text ranges, with resolve and notify.
+3. **Diff view** between two versions in the History panel.
+4. **Frontend tests** (Vitest + Testing Library) for the save and remote-update state machine, plus Playwright in CI.
+5. CSRF token for state-changing requests, upload rate limiting, and structured logging with request ids.

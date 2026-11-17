@@ -3,6 +3,7 @@ import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -17,6 +18,10 @@ import {
 const COOKIE = 'ajaia_session';
 const MAX_TITLE = 200;
 const MAX_CONTENT_CHARS = 1_000_000;
+// Autosaves by the same person within this window are folded into one history
+// entry (like an "editing session"), so history stays readable.
+const VERSION_SESSION_MS = 5 * 60 * 1000;
+const PRESENCE_TTL_MS = 25 * 1000;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -28,10 +33,31 @@ class HttpError extends Error {
 // Wrap async handlers so thrown errors reach the error middleware.
 const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-export function createApp({ db, jwtSecret, clientDist }) {
+export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 10 }) {
   const app = express();
+  app.set('trust proxy', 1); // behind Render's proxy: use the real client IP
+  app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.set({
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    });
+    next();
+  });
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
+
+  // Brute-force protection: only failed logins count toward the limit.
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: loginAttemptsPerWindow,
+    skipSuccessfulRequests: true,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many failed sign-in attempts. Try again in a few minutes.' },
+  });
 
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -56,6 +82,7 @@ export function createApp({ db, jwtSecret, clientDist }) {
 
   app.post(
     '/api/auth/login',
+    loginLimiter,
     h(async (req, res) => {
       const email = String(req.body?.email || '').trim().toLowerCase();
       const password = String(req.body?.password || '');
@@ -123,6 +150,9 @@ export function createApp({ db, jwtSecret, clientDist }) {
 
   async function serializeDoc(doc, role) {
     const [owner] = await db.query('SELECT id, email, name FROM users WHERE id = $1', [doc.owner_id]);
+    const [editor] = doc.updated_by
+      ? await db.query('SELECT id, name FROM users WHERE id = $1', [doc.updated_by])
+      : [];
     return {
       id: doc.id,
       title: doc.title,
@@ -130,6 +160,7 @@ export function createApp({ db, jwtSecret, clientDist }) {
       version: Number(doc.version),
       createdAt: doc.created_at,
       updatedAt: doc.updated_at,
+      updatedBy: editor || null,
       owner,
       role,
       shares: role === 'owner' ? await sharesFor(doc.id) : undefined,
@@ -143,16 +174,63 @@ export function createApp({ db, jwtSecret, clientDist }) {
     return title;
   }
 
-  async function insertDoc(ownerId, title, html) {
+  async function insertDoc(ownerId, title, html, note = 'Created') {
     const now = new Date().toISOString();
     const id = randomUUID();
     await db.query(
-      `INSERT INTO documents (id, owner_id, title, content, version, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 1, $5, $5)`,
+      `INSERT INTO documents (id, owner_id, title, content, version, created_at, updated_at, updated_by)
+       VALUES ($1, $2, $3, $4, 1, $5, $5, $2)`,
       [id, ownerId, title, sanitizeContent(html), now]
     );
     const [doc] = await db.query('SELECT * FROM documents WHERE id = $1', [id]);
+    await recordVersion(doc, ownerId, { note, forceNew: true });
     return doc;
+  }
+
+  // ---------- version history ----------
+  /**
+   * Documents created before version history existed have no snapshots. Before
+   * their first change, store the current state as a baseline so the original
+   * content can always be restored.
+   */
+  async function ensureBaseline(doc) {
+    const [any] = await db.query('SELECT id FROM document_versions WHERE document_id = $1 LIMIT 1', [doc.id]);
+    if (any) return;
+    await db.query(
+      `INSERT INTO document_versions (id, document_id, title, content, author_id, note, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 'Original version', $6, $6)`,
+      [randomUUID(), doc.id, doc.title, doc.content, doc.updated_by || doc.owner_id, doc.updated_at]
+    );
+  }
+
+  /**
+   * Snapshot the document's current state. Consecutive saves by the same
+   * author within VERSION_SESSION_MS update the latest snapshot instead of
+   * adding a new one. Milestones (entries with a note: Created, Imported,
+   * Restored) are never modified, so they can always be restored exactly.
+   */
+  async function recordVersion(doc, authorId, { note = null, forceNew = false } = {}) {
+    const now = new Date().toISOString();
+    if (!forceNew) {
+      const [latest] = await db.query(
+        `SELECT id, author_id, created_at, note FROM document_versions
+          WHERE document_id = $1 ORDER BY updated_at DESC LIMIT 1`,
+        [doc.id]
+      );
+      const fresh = latest && Date.now() - new Date(latest.created_at).getTime() < VERSION_SESSION_MS;
+      if (fresh && latest.author_id === authorId && !latest.note) {
+        await db.query(
+          'UPDATE document_versions SET title = $1, content = $2, updated_at = $3 WHERE id = $4',
+          [doc.title, doc.content, now, latest.id]
+        );
+        return;
+      }
+    }
+    await db.query(
+      `INSERT INTO document_versions (id, document_id, title, content, author_id, note, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+      [randomUUID(), doc.id, doc.title, doc.content, authorId, note, now]
+    );
   }
 
   // ---------- documents ----------
@@ -233,15 +311,17 @@ export function createApp({ db, jwtSecret, clientDist }) {
         content = sanitizeContent(body.content);
       }
 
+      await ensureBaseline(doc);
       const now = new Date().toISOString();
       const updated = await db.query(
-        `UPDATE documents SET title = $1, content = $2, version = version + 1, updated_at = $3
+        `UPDATE documents SET title = $1, content = $2, version = version + 1, updated_at = $3, updated_by = $6
           WHERE id = $4 AND version = $5 RETURNING *`,
-        [title, content, now, doc.id, version]
+        [title, content, now, doc.id, version, req.user.id]
       );
       if (!updated.length) {
         throw new HttpError(409, 'This document was changed by someone else. Reload to get the latest version.');
       }
+      await recordVersion(updated[0], req.user.id);
       res.json({ document: await serializeDoc(updated[0], role) });
     })
   );
@@ -253,7 +333,9 @@ export function createApp({ db, jwtSecret, clientDist }) {
       const { doc, role } = await loadDocWithRole(req.params.id, req.user.id);
       if (role !== 'owner') throw new HttpError(403, 'Only the owner can delete this document');
       await db.query('DELETE FROM document_shares WHERE document_id = $1', [doc.id]);
+      await db.query('DELETE FROM document_versions WHERE document_id = $1', [doc.id]);
       await db.query('DELETE FROM documents WHERE id = $1', [doc.id]);
+      presence.delete(doc.id);
       res.status(204).end();
     })
   );
@@ -316,7 +398,7 @@ export function createApp({ db, jwtSecret, clientDist }) {
     singleFile,
     h(async (req, res) => {
       const { title, html } = await fileToHtml(req.file.originalname, req.file.buffer);
-      const doc = await insertDoc(req.user.id, title, html);
+      const doc = await insertDoc(req.user.id, title, html, `Imported from ${req.file.originalname}`.slice(0, 200));
       res.status(201).json({ document: await serializeDoc(doc, 'owner') });
     })
   );
@@ -330,6 +412,119 @@ export function createApp({ db, jwtSecret, clientDist }) {
       const { html } = await fileToHtml(req.file.originalname, req.file.buffer);
       res.json({ html });
     })
+  );
+
+  // ---------- version history routes ----------
+  const requireEditAccess = async (req) => {
+    const ctx = await loadDocWithRole(req.params.id, req.user.id);
+    if (!canEdit(ctx.role)) throw new HttpError(403, 'Version history is available to owners and editors');
+    return ctx;
+  };
+
+  app.get(
+    '/api/documents/:id/versions',
+    requireUser,
+    h(async (req, res) => {
+      const { doc } = await requireEditAccess(req);
+      const rows = await db.query(
+        `SELECT v.id, v.title, v.note, v.created_at, v.updated_at, u.name AS author_name
+           FROM document_versions v JOIN users u ON u.id = v.author_id
+          WHERE v.document_id = $1 ORDER BY v.updated_at DESC LIMIT 100`,
+        [doc.id]
+      );
+      res.json({
+        versions: rows.map((v, i) => ({
+          id: v.id,
+          title: v.title,
+          note: v.note,
+          author: v.author_name,
+          startedAt: v.created_at,
+          savedAt: v.updated_at,
+          current: i === 0,
+        })),
+      });
+    })
+  );
+
+  app.get(
+    '/api/documents/:id/versions/:versionId',
+    requireUser,
+    h(async (req, res) => {
+      const { doc } = await requireEditAccess(req);
+      const [v] = await db.query(
+        'SELECT id, title, content, updated_at FROM document_versions WHERE id = $1 AND document_id = $2',
+        [req.params.versionId, doc.id]
+      );
+      if (!v) throw new HttpError(404, 'Version not found');
+      res.json({ version: { id: v.id, title: v.title, content: v.content, savedAt: v.updated_at } });
+    })
+  );
+
+  app.post(
+    '/api/documents/:id/versions/:versionId/restore',
+    requireUser,
+    h(async (req, res) => {
+      const { doc, role } = await requireEditAccess(req);
+      const [v] = await db.query(
+        'SELECT title, content, updated_at FROM document_versions WHERE id = $1 AND document_id = $2',
+        [req.params.versionId, doc.id]
+      );
+      if (!v) throw new HttpError(404, 'Version not found');
+      const now = new Date().toISOString();
+      const [updated] = await db.query(
+        `UPDATE documents SET title = $1, content = $2, version = version + 1, updated_at = $3, updated_by = $4
+          WHERE id = $5 RETURNING *`,
+        [v.title, v.content, now, req.user.id, doc.id]
+      );
+      const when = new Date(v.updated_at).toISOString().slice(0, 16).replace('T', ' ');
+      await recordVersion(updated, req.user.id, { note: `Restored version from ${when} UTC`, forceNew: true });
+      res.json({ document: await serializeDoc(updated, role) });
+    })
+  );
+
+  // ---------- presence ----------
+  // In-memory, per process: who has each document open right now. Clients send
+  // a heartbeat every few seconds; entries expire after PRESENCE_TTL_MS. The
+  // response also carries the document's current version so clients can pull
+  // in a collaborator's saved changes without a manual reload.
+  const presence = new Map(); // docId -> Map(userId -> { name, email, editing, seenAt })
+
+  app.post(
+    '/api/documents/:id/presence',
+    requireUser,
+    h(async (req, res) => {
+      const { doc } = await loadDocWithRole(req.params.id, req.user.id);
+      const now = Date.now();
+      const here = presence.get(doc.id) || new Map();
+      presence.set(doc.id, here);
+      here.set(req.user.id, {
+        name: req.user.name,
+        email: req.user.email,
+        editing: Boolean(req.body?.editing),
+        seenAt: now,
+      });
+      for (const [uid, p] of here) if (now - p.seenAt > PRESENCE_TTL_MS) here.delete(uid);
+      const [editor] = doc.updated_by
+        ? await db.query('SELECT id, name FROM users WHERE id = $1', [doc.updated_by])
+        : [];
+      res.json({
+        viewers: [...here.entries()]
+          .filter(([uid]) => uid !== req.user.id)
+          .map(([id, p]) => ({ id, name: p.name, email: p.email, editing: p.editing })),
+        version: Number(doc.version),
+        updatedAt: doc.updated_at,
+        updatedBy: editor || null,
+      });
+    })
+  );
+
+  app.delete(
+    '/api/documents/:id/presence',
+    requireUser,
+    (req, res) => {
+      presence.get(req.params.id)?.delete(req.user.id);
+      res.status(204).end();
+    }
   );
 
   app.get('/api/health', (_req, res) => res.json({ ok: true, db: db.kind }));

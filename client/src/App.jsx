@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, checkFile, ACCEPTED_FILES } from './api.js';
 import Login from './Login.jsx';
 import DocumentEditor from './DocumentEditor.jsx';
+import { Avatar } from './usePresence.jsx';
 
 // Minimal hash router: "#/doc/<id>" opens a document, anything else is home.
 function useHashRoute() {
@@ -35,6 +36,8 @@ export default function App() {
   const [docId, go] = useHashRoute();
   const [toast, setToast] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState('');
+  const searchRef = useRef(null);
   const fileInput = useRef(null);
 
   const notify = useCallback((message, kind = 'info') => {
@@ -107,8 +110,26 @@ export default function App() {
     go(null);
   }
 
+  // "/" focuses search, like many productivity tools.
+  useEffect(() => {
+    const onKey = (e) => {
+      const typing = ['INPUT', 'TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable;
+      if (e.key === '/' && !typing) {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   if (user === undefined) return <div className="center muted">Loading…</div>;
   if (!user) return <Login onLogin={setUser} />;
+
+  const q = query.trim().toLowerCase();
+  const match = (d) => !q || d.title.toLowerCase().includes(q) || d.owner?.name?.toLowerCase().includes(q);
+  const owned = docs.owned.filter(match);
+  const shared = docs.shared.filter(match);
 
   const DocLink = ({ d, shared }) => (
     <li>
@@ -138,23 +159,36 @@ export default function App() {
           <p className="hint">Import supports .txt, .md and .docx (max 2 MB)</p>
         </div>
 
+        <div className="search">
+          <input
+            ref={searchRef}
+            type="search"
+            placeholder="Search documents   /"
+            aria-label="Search documents"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
+          />
+        </div>
+
         <nav>
-          <h4>My documents <span className="count">{docs.owned.length}</span></h4>
-          {docs.owned.length ? (
-            <ul>{docs.owned.map((d) => <DocLink key={d.id} d={d} />)}</ul>
+          <h4>My documents <span className="count">{owned.length}</span></h4>
+          {owned.length ? (
+            <ul>{owned.map((d) => <DocLink key={d.id} d={d} />)}</ul>
           ) : (
-            <p className="empty">No documents yet.</p>
+            <p className="empty">{q ? 'No matches.' : 'No documents yet.'}</p>
           )}
-          <h4>Shared with me <span className="count">{docs.shared.length}</span></h4>
-          {docs.shared.length ? (
-            <ul>{docs.shared.map((d) => <DocLink key={d.id} d={d} shared />)}</ul>
+          <h4>Shared with me <span className="count">{shared.length}</span></h4>
+          {shared.length ? (
+            <ul>{shared.map((d) => <DocLink key={d.id} d={d} shared />)}</ul>
           ) : (
-            <p className="empty">Nothing shared with you yet.</p>
+            <p className="empty">{q ? 'No matches.' : 'Nothing shared with you yet.'}</p>
           )}
         </nav>
 
         <div className="user-box">
-          <div>
+          <Avatar name={user.name} email={user.email} size={32} />
+          <div className="user-meta">
             <strong>{user.name}</strong>
             <div className="muted small">{user.email}</div>
           </div>
