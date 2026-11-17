@@ -106,6 +106,8 @@ nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
 .empty { margin: 2px 10px; font-size: 12.5px; color: var(--muted); }
 .user-box { border-top: 1px solid var(--border); padding: 12px 12px 12px 16px; display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
 .user-meta { flex: 1; min-width: 0; overflow: hidden; }
+.signout { flex: none; color: var(--text-2); }
+.signout:hover:not(:disabled) { color: var(--danger); border-color: #f1c4c4; background: var(--danger-soft); }
 .user-meta .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 

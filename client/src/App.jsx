@@ -202,8 +202,8 @@ export default function App() {
             <strong>{user.name}</strong>
             <div className="muted small">{user.email}</div>
           </div>
-          <button className="icon-btn" onClick={logout} title="Sign out" aria-label="Sign out">
-            <IconLogout />
+          <button className="btn small signout" onClick={logout} aria-label="Sign out">
+            <IconLogout size={14} /> Sign out
           </button>
         </div>
       </aside>
