@@ -40,6 +40,15 @@ Each open editor sends a heartbeat every 4 s (15 s when the tab is hidden). The 
 
 **8. Production hardening.** A health check that actually queries the database (so Render restarts an instance that lost its DB, rather than only checking that the process is alive); structured JSON access logs with a request id that is returned in a header and in 500 responses, so a user-reported error can be found in the logs; graceful shutdown on SIGTERM so in-flight saves finish during deploys; additive, idempotent migrations at boot (the live database was upgraded in place); failed-login rate limiting; security headers (`nosniff`, `DENY` framing, referrer policy); `trust proxy` for real client IPs behind Render; and CI that runs every test on both database engines plus the production build.
 
+**9. Failure handling on the client.** Autosave treats failures by type. Network errors, 5xx and 429 are retried with exponential backoff (2 s → 30 s), and immediately on the browser's `online` event. 409 stops and offers "Load latest". 403 means the owner changed my access, so the editor becomes read-only. 404 means the document is gone. 401 returns to sign-in. In every failure case the edit stays marked as unsaved, so the close-tab warning still protects it.
+
+**10. Security review notes.**
+- Sessions: httpOnly, `SameSite=Lax`, and `Secure` cookies. Lax blocks cross-site POST/PATCH/DELETE from carrying the cookie, which is the CSRF protection for this scope; a CSRF token would be the next step for stricter requirements.
+- Login takes the same bcrypt time for unknown emails (no user enumeration by timing) and is rate limited; uploads are rate limited per user.
+- The server will not start in production without `JWT_SECRET`.
+- Stored HTML is allowlist-sanitized on every write; links are forced to `rel="noopener noreferrer nofollow"`.
+- **Known, accepted dependency advisories** (from `npm audit`): (a) TipTap `mergeAttributes` prototype-key issue, fixed only in TipTap v3, a major upgrade I chose not to do inside the timebox. It requires attacker-controlled node attributes, and the server sanitizer removes every non-allowlisted attribute before content is stored or shown to anyone else. (b) `picomatch` ReDoS via Vite, build-time only and applied to our own config globs, never user input; no patched release exists yet.
+
 ## What I deliberately did not build
 
 | Cut | Why |

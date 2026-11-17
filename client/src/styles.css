@@ -179,6 +179,7 @@ nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
 }
 .demo-user:hover { border-color: var(--border-strong); background: var(--surface-2); }
 .demo-user.selected { border-color: var(--primary); background: var(--primary-soft); }
+.notice { color: #6b4500; background: #fff8e8; border-radius: var(--radius-sm); padding: 8px 10px; font-size: 13px; }
 .error { color: var(--danger); background: var(--danger-soft); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 13px; }
 
 /* ==========================================================================
@@ -199,7 +200,10 @@ nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
 .status { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: 0.85; }
 .status.saved { color: var(--ok); }
-.status.error, .status.conflict, .status.invalid { color: var(--danger); }
+.status.error, .status.conflict, .status.invalid, .status.readonly, .status.gone { color: var(--danger); }
+.status.retrying { color: var(--warn); }
+.status.retrying::before { animation: blink 1s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: 0.25; } }
 .status.saving, .status.unsaved { color: var(--warn); }
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; padding: 5px 10px; border-radius: 20px; background: #eef1f6; }
 .badge.viewer { background: #fff4e0; color: #8a5300; }

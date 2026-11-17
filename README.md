@@ -23,7 +23,7 @@ The login page has one-click buttons for each account.
 |---|---|
 | Documents | Create, rename (click the title), edit, delete (owner only), **make a copy** (any collaborator gets their own copy), reopen from the sidebar or the recent-documents grid |
 | Rich text | Bold, italic, underline, strikethrough, Heading 1–3, bulleted and numbered lists, quote, code block, divider, undo/redo, keyboard shortcuts |
-| Saving | Autosave about 0.8 s after you stop typing, a visible save status, Ctrl/Cmd+S to save now, a warning before closing with unsaved changes |
+| Saving | Autosave about 0.8 s after you stop typing, a visible save status, Ctrl/Cmd+S to save now, a warning before closing with unsaved changes. If the network or server drops, edits stay in the tab and are **retried automatically** (with backoff, and immediately when the browser comes back online). |
 | File upload | **Import file** (sidebar) turns a `.txt`, `.md` or `.docx` file into a new document. **⋯ → Insert from file** adds a file's content into the open document. Maximum 2 MB. |
 | Sharing | Owner shares by email as **Can edit** or **Can view**, can change roles and remove access. The sidebar separates **My documents** from **Shared with me**. Viewers get a read-only editor. |
 | Persistence | Postgres in production, SQLite locally. Formatting is stored as sanitized HTML. |
@@ -34,7 +34,8 @@ The login page has one-click buttons for each account.
 | Search | Filter documents in the sidebar (press `/` to focus) |
 | Export | Download as Markdown or HTML, Print / Save as PDF |
 | Safety | Server-side HTML sanitization, conflict detection (409) instead of silent overwrites, uniform 404 for documents you cannot access, login rate limiting, security headers |
-| Operations | `/api/health` checks the database (used by Render's health check), JSON access logs with a request id on every response, graceful shutdown on deploys |
+| Resilience | Losing edit access mid-session switches the editor to read-only with a clear message; an expired session returns to sign-in with an explanation; a deleted document stops autosave and presence cleanly |
+| Operations | gzip compression, long-term caching for fingerprinted assets (`index.html` always revalidated), `/api/health` checks the database (used by Render's health check), JSON access logs with a request id on every response, graceful shutdown on deploys |
 
 **Supported upload types:** `.txt`, `.md`, `.docx` only (max 2 MB). Other types are rejected with a clear message in both the UI and the API.
 
@@ -63,7 +64,9 @@ No database setup is needed locally. With no `DATABASE_URL` set, the server crea
 | `PORT` | `3001` | HTTP port |
 | `DATABASE_URL` | unset → SQLite | Postgres connection string (production) |
 | `SQLITE_FILE` | `./data/ajaia.db` | SQLite path when `DATABASE_URL` is unset |
-| `JWT_SECRET` | dev default | Secret for signing session cookies. **Set this in production.** |
+| `JWT_SECRET` | dev default | Secret for signing session cookies. **Required in production**: the server refuses to start without it. |
+| `DATABASE_POOL_MAX` | `10` | Max Postgres connections |
+| `LOG_REQUESTS` | on in production | JSON access log line per API request |
 | `DATABASE_SSL` | auto | Force Postgres SSL on (`true`) or off (`false`) |
 
 ## Tests
@@ -72,7 +75,7 @@ No database setup is needed locally. With no `DATABASE_URL` set, the server crea
 npm test
 ```
 
-This runs 13 API integration tests (Node's built-in test runner + supertest) against an in-memory SQLite database. Set `TEST_DATABASE_URL` to run the same suite against Postgres. They cover:
+This runs 17 API integration tests (Node's built-in test runner + supertest) against an in-memory SQLite database. Set `TEST_DATABASE_URL` to run the same suite against Postgres. They cover:
 
 - authentication (unauthenticated requests and wrong passwords are rejected)
 - create, rename, save and reopen with formatting preserved
@@ -85,10 +88,13 @@ This runs 13 API integration tests (Node's built-in test runner + supertest) aga
 - presence: who is in a document, live version reporting, leaving, and no access for strangers
 - login rate limiting and security headers
 - make a copy (ownership and isolation), health check (including database failure → 503) and request ids
+- hardening: atomic delete with cascade, safe links (no reverse tabnabbing), request-id validation, presence cleanup, caching and compression headers
 
 **CI:** GitHub Actions (`.github/workflows/ci.yml`) runs the suite on **both SQLite and Postgres 16**, plus the production build, on every push and pull request.
 
-**Browser smoke test** (optional, Playwright, needs a fresh database): `python e2e/smoke_test.py` while the app is running. It drives two browsers at once (Alice and Bob) through the full flow: editing, persistence, import, sharing, read-only mode, presence, live updates, outline, history restore and search.
+**Browser tests** (optional, Playwright, need a fresh database and the app running): `python e2e/smoke_test.py` and `python e2e/reliability_test.py`. The reliability test simulates real failures: going offline mid-edit, edit access revoked while typing, and the session expiring.
+
+`e2e/smoke_test.py` It drives two browsers at once (Alice and Bob) through the full flow: editing, persistence, import, sharing, read-only mode, presence, live updates, outline, history restore and search.
 
 ## Deploy (Render, free)
 

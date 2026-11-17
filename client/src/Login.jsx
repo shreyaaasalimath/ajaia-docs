@@ -15,7 +15,7 @@ const DEMO = [
   { email: 'carol@ajaia.test', name: 'Carol', note: 'no access yet' },
 ];
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, notice }) {
   const [email, setEmail] = useState('alice@ajaia.test');
   const [password, setPassword] = useState('password123');
   const [error, setError] = useState('');
@@ -77,6 +77,7 @@ export default function Login({ onLogin }) {
             Password
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
           </label>
+          {notice && !error && <div className="notice" role="status">{notice}</div>}
           {error && <div className="error" role="alert">{error}</div>}
           <button className="btn primary block lg" disabled={loading}>
             {loading ? 'Signing in…' : 'Sign in'}

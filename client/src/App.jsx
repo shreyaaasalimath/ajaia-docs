@@ -38,6 +38,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
+  const [sessionNotice, setSessionNotice] = useState('');
   const searchRef = useRef(null);
   const fileInput = useRef(null);
 
@@ -50,6 +51,17 @@ export default function App() {
     const t = setTimeout(() => setToast(null), 4000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setUser((u) => {
+        if (u) setSessionNotice('Your session expired. Please sign in again.');
+        return null;
+      });
+    };
+    window.addEventListener('ajaia:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('ajaia:unauthorized', onUnauthorized);
+  }, []);
 
   useEffect(() => {
     api
@@ -125,7 +137,16 @@ export default function App() {
   }, []);
 
   if (user === undefined) return <div className="center muted">Loading…</div>;
-  if (!user) return <Login onLogin={setUser} />;
+  if (!user)
+    return (
+      <Login
+        notice={sessionNotice}
+        onLogin={(u) => {
+          setSessionNotice('');
+          setUser(u);
+        }}
+      />
+    );
 
   const q = query.trim().toLowerCase();
   const match = (d) => !q || d.title.toLowerCase().includes(q) || d.owner?.name?.toLowerCase().includes(q);

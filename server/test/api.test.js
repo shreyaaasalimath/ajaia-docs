@@ -265,3 +265,56 @@ test('ops: health checks the database and every response carries a request id', 
   const down = await request(broken).get('/api/health').expect(503);
   assert.equal(down.body.ok, false);
 });
+
+test('hardening: deleting a document removes its shares and history in one step', async () => {
+  const alice = await login('alice@ajaia.test');
+  const { body } = await alice.post('/api/documents').send({ title: 'Doomed', content: '<p>x</p>' }).expect(201);
+  const id = body.document.id;
+  await alice.post(`/api/documents/${id}/shares`).send({ email: 'bob@ajaia.test' }).expect(201);
+  await alice.patch(`/api/documents/${id}`).send({ content: '<p>y</p>', version: 1 }).expect(200);
+  await alice.delete(`/api/documents/${id}`).expect(204);
+  const [shares] = await db.query('SELECT COUNT(*) AS n FROM document_shares WHERE document_id = $1', [id]);
+  const [versions] = await db.query('SELECT COUNT(*) AS n FROM document_versions WHERE document_id = $1', [id]);
+  assert.equal(Number(shares.n), 0);
+  assert.equal(Number(versions.n), 0);
+});
+
+test('hardening: links are forced to open safely (no reverse tabnabbing)', async () => {
+  const alice = await login('alice@ajaia.test');
+  const { body } = await alice
+    .post('/api/documents')
+    .send({ content: '<p><a href="https://example.com" target="_self" onclick="x()">site</a><a href="javascript:alert(1)">bad</a></p>' })
+    .expect(201);
+  assert.equal(
+    body.document.content,
+    '<p><a href="https://example.com" target="_blank" rel="noopener noreferrer nofollow">site</a><a target="_blank" rel="noopener noreferrer nofollow">bad</a></p>'
+  );
+});
+
+test('hardening: unsafe incoming request ids are replaced, presence cleans up after itself', async () => {
+  const res = await request(app).get('/api/health').set('X-Request-Id', '<script>alert(1)</script> ' + 'x'.repeat(100));
+  assert.match(res.headers['x-request-id'], /^[0-9a-f-]{36}$/);
+
+  const alice = await login('alice@ajaia.test');
+  const { body } = await alice.post('/api/documents').send({ title: 'Presence cleanup' }).expect(201);
+  await alice.post(`/api/documents/${body.document.id}/presence`).send({}).expect(200);
+  assert.ok(app.locals.presence.has(body.document.id));
+  await alice.delete(`/api/documents/${body.document.id}/presence`).expect(204);
+  assert.ok(!app.locals.presence.has(body.document.id), 'empty presence entries are removed');
+});
+
+test('hardening: hashed assets are cached forever, index.html is revalidated, responses are compressed', async (t) => {
+  const { fileURLToPath } = await import('node:url');
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
+  if (!fs.existsSync(path.join(dist, 'assets'))) return t.skip('run "npm run build" first');
+  const served = createApp({ db, jwtSecret: 'x', clientDist: dist });
+  const js = fs.readdirSync(path.join(dist, 'assets')).find((f) => f.endsWith('.js'));
+  const asset = await request(served).get(`/assets/${js}`).set('Accept-Encoding', 'gzip').expect(200);
+  assert.match(asset.headers['cache-control'], /max-age=31536000.*immutable/);
+  assert.equal(asset.headers['content-encoding'], 'gzip');
+  const page = await request(served).get('/some/deep/link').expect(200);
+  assert.equal(page.headers['cache-control'], 'no-cache');
+  assert.match(page.text, /<div id="root">/);
+});

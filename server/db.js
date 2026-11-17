@@ -59,7 +59,14 @@ function createPg(url) {
   const pool = new Pool({
     connectionString: url,
     ssl: useSsl ? { rejectUnauthorized: false } : false,
+    max: Number(process.env.DATABASE_POOL_MAX) || 10,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000,
   });
+  // Without this handler, an idle client losing its connection (e.g. the
+  // database restarting for maintenance) emits an unhandled 'error' event and
+  // crashes the whole process. The pool replaces the client on next use.
+  pool.on('error', (err) => console.error(JSON.stringify({ level: 'error', msg: 'pg pool error', error: err.message })));
   return {
     kind: 'postgres',
     async query(sql, params = []) {

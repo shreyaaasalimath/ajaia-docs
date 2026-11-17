@@ -22,6 +22,10 @@ async function request(method, url, body) {
   }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !url.startsWith('/api/auth/')) {
+    // Session expired mid-use: let the app return to the sign-in screen.
+    window.dispatchEvent(new CustomEvent('ajaia:unauthorized'));
+  }
   if (!res.ok) throw new ApiError(res.status, data.error || `Request failed (${res.status})`);
   return data;
 }

@@ -9,9 +9,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-me';
 
+// Refuse to start in production with the public default secret: anyone could
+// forge a session cookie for any user.
 if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
-  console.warn('WARNING: JWT_SECRET is not set; using an insecure default.');
+  console.error('FATAL: JWT_SECRET must be set in production.');
+  process.exit(1);
 }
+
+process.on('unhandledRejection', (err) => {
+  console.error(JSON.stringify({ level: 'error', msg: 'unhandledRejection', error: String(err?.stack || err) }));
+});
 
 const db = await createDb({
   databaseUrl: process.env.DATABASE_URL,

@@ -29,9 +29,12 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      # Build first: the caching/compression test serves the built client.
+      - name: Production build
+        run: npm run build
       - name: API tests
         run: npm test
         env:
           TEST_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgres://postgres:postgres@localhost:5432/postgres' || '' }}
-      - name: Production build
-        run: npm run build
+      - name: Audit runtime dependencies (high/critical)
+        run: npm audit --omit=dev --audit-level=critical

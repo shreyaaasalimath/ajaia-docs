@@ -51,7 +51,8 @@
 - Export to Markdown / HTML, and Print → PDF
 - Make a copy of any document you can open
 - Production hardening: login rate limiting, security headers, in-place database migrations, database-aware health check, request-id logging, graceful shutdown
-- 13 passing API tests; **GitHub Actions CI runs them on SQLite and Postgres** plus the production build; two-browser Playwright smoke test
+- Resilient autosave: survives network drops and server restarts (automatic retry), handles access changes and expired sessions without losing or overwriting work
+- 17 passing API tests; **GitHub Actions CI runs them on SQLite and Postgres** plus the production build; two-browser Playwright smoke test and a failure-mode reliability test
 
 **Incomplete / intentionally deprioritized**
 - No true simultaneous co-editing (CRDT). Saved changes appear live for others, but two people typing at the same moment get a clear "newer version" banner rather than merged keystrokes

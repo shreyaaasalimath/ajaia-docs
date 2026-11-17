@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import rateLimit from 'express-rate-limit';
+import compression from 'compression';
 import path from 'node:path';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -22,6 +23,10 @@ const MAX_CONTENT_CHARS = 1_000_000;
 // entry (like an "editing session"), so history stays readable.
 const VERSION_SESSION_MS = 5 * 60 * 1000;
 const PRESENCE_TTL_MS = 25 * 1000;
+// Compared against when an email is unknown, so a failed login takes the same
+// time whether or not the account exists (prevents user enumeration by timing).
+const DUMMY_HASH = bcrypt.hashSync('timing-equalizer', 10);
+const REQUEST_ID_RE = /^[\w-]{1,64}$/;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -48,7 +53,9 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
   });
   // Request id (echoed to the client) + one access-log line per API request.
   app.use((req, res, next) => {
-    req.id = req.get('x-request-id') || randomUUID();
+    // Accept an upstream id only if it is short and safe to log.
+    const incoming = req.get('x-request-id');
+    req.id = incoming && REQUEST_ID_RE.test(incoming) ? incoming : randomUUID();
     res.set('X-Request-Id', req.id);
     if (logRequests && req.path.startsWith('/api/')) {
       const started = process.hrtime.bigint();
@@ -69,6 +76,7 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
     }
     next();
   });
+  app.use(compression());
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
 
@@ -80,6 +88,16 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     message: { error: 'Too many failed sign-in attempts. Try again in a few minutes.' },
+  });
+
+  // File conversion is the most CPU-heavy endpoint; cap it per user.
+  const uploadLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 20,
+    keyGenerator: (req) => req.user?.id || req.ip,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many uploads in a short time. Please wait a minute and try again.' },
   });
 
   const upload = multer({
@@ -111,7 +129,8 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
       const password = String(req.body?.password || '');
       if (!email || !password) throw new HttpError(400, 'Email and password are required');
       const [user] = await db.query('SELECT * FROM users WHERE email = $1', [email]);
-      if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+      const valid = await bcrypt.compare(password, user ? user.password_hash : DUMMY_HASH);
+      if (!user || !valid) {
         throw new HttpError(401, 'Invalid email or password');
       }
       const token = jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: '7d' });
@@ -126,7 +145,7 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
   );
 
   app.post('/api/auth/logout', (_req, res) => {
-    res.clearCookie(COOKIE);
+    res.clearCookie(COOKIE, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
     res.json({ ok: true });
   });
 
@@ -355,8 +374,8 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
     h(async (req, res) => {
       const { doc, role } = await loadDocWithRole(req.params.id, req.user.id);
       if (role !== 'owner') throw new HttpError(403, 'Only the owner can delete this document');
-      await db.query('DELETE FROM document_shares WHERE document_id = $1', [doc.id]);
-      await db.query('DELETE FROM document_versions WHERE document_id = $1', [doc.id]);
+      // One statement: shares and versions go with it via ON DELETE CASCADE,
+      // so a failure part-way can never leave orphaned rows behind.
       await db.query('DELETE FROM documents WHERE id = $1', [doc.id]);
       presence.delete(doc.id);
       res.status(204).end();
@@ -430,6 +449,7 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
   app.post(
     '/api/documents/import',
     requireUser,
+    uploadLimiter,
     singleFile,
     h(async (req, res) => {
       const { title, html } = await fileToHtml(req.file.originalname, req.file.buffer);
@@ -442,6 +462,7 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
   app.post(
     '/api/convert',
     requireUser,
+    uploadLimiter,
     singleFile,
     h(async (req, res) => {
       const { html } = await fileToHtml(req.file.originalname, req.file.buffer);
@@ -523,6 +544,17 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
   // response also carries the document's current version so clients can pull
   // in a collaborator's saved changes without a manual reload.
   const presence = new Map(); // docId -> Map(userId -> { name, email, editing, seenAt })
+  // Sweep stale entries so documents nobody has open do not accumulate in memory
+  // (tabs that close without saying goodbye never call DELETE).
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const [docId, here] of presence) {
+      for (const [uid, p] of here) if (now - p.seenAt > PRESENCE_TTL_MS) here.delete(uid);
+      if (!here.size) presence.delete(docId);
+    }
+  }, 60_000);
+  sweep.unref();
+  app.locals.presence = presence; // exposed for tests
 
   app.post(
     '/api/documents/:id/presence',
@@ -557,7 +589,9 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
     '/api/documents/:id/presence',
     requireUser,
     (req, res) => {
-      presence.get(req.params.id)?.delete(req.user.id);
+      const here = presence.get(req.params.id);
+      here?.delete(req.user.id);
+      if (here && !here.size) presence.delete(req.params.id);
       res.status(204).end();
     }
   );
@@ -583,8 +617,17 @@ export function createApp({ db, jwtSecret, clientDist, loginAttemptsPerWindow = 
 
   // ---------- static client ----------
   if (clientDist && fs.existsSync(clientDist)) {
-    app.use(express.static(clientDist));
-    app.get('*', (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
+    // Vite fingerprints files in /assets, so they can be cached forever;
+    // index.html must always be revalidated so users get new deploys.
+    app.use(
+      '/assets',
+      express.static(path.join(clientDist, 'assets'), { immutable: true, maxAge: '1y', index: false })
+    );
+    app.use(express.static(clientDist, { index: false, maxAge: 0 }));
+    app.get('*', (_req, res) => {
+      res.set('Cache-Control', 'no-cache');
+      res.sendFile(path.join(clientDist, 'index.html'));
+    });
   }
 
   // ---------- errors ----------

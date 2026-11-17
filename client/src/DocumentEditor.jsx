@@ -15,14 +15,21 @@ import {
 } from './Icons.jsx';
 
 const SAVE_DELAY_MS = 800;
+const MAX_RETRY_DELAY_MS = 30_000;
+// Network failures, server errors and rate limits are worth retrying on their own;
+// anything else (validation, too large) needs the user to change something first.
+const isRetryable = (e) => e.status === 0 || e.status >= 500 || e.status === 429;
 
 const STATUS_LABEL = {
   saved: 'All changes saved',
   unsaved: 'Unsaved changes…',
   saving: 'Saving…',
-  error: 'Save failed. Retrying when you keep typing',
+  error: 'Not saved. Edit again to retry',
+  retrying: 'Connection problem. Your changes are kept here and will be retried…',
   conflict: 'Someone else saved a newer version',
   invalid: 'Title cannot be empty',
+  readonly: 'Your access changed to view-only. Recent edits were not saved',
+  gone: 'This document was deleted or your access was removed',
 };
 
 // Loads the document, then hands off to the editor once content is available
@@ -89,7 +96,11 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onCopied, onD
   const blockedRef = useRef(false); // stop saving after a conflict
   const timerRef = useRef(null);
   const htmlRef = useRef(initialDoc.content); // latest HTML, readable even after the editor is destroyed
+  const retriesRef = useRef(0);
+  const canEditRef = useRef(canEdit);
+  canEditRef.current = canEdit;
   const importInput = useRef(null);
+  const menuRef = useRef(null);
 
   const save = useCallback(async () => {
     clearTimeout(timerRef.current);
@@ -103,34 +114,60 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onCopied, onD
     dirtyRef.current = false;
     setStatus('saving');
     const titleChanged = titleRef.current.trim() !== savedTitleRef.current;
+    let retryIn = 0;
+    let succeeded = false;
     try {
       const { document } = await api.updateDoc(docId, {
         title: titleRef.current.trim(),
         content: htmlRef.current,
         version: versionRef.current,
       });
+      succeeded = true;
       versionRef.current = document.version;
       savedTitleRef.current = document.title;
-      setDoc((d) => ({ ...d, title: document.title, updatedAt: document.updatedAt }));
+      setDoc((d) => ({ ...d, title: document.title, updatedAt: document.updatedAt, updatedBy: document.updatedBy }));
       setStatus(dirtyRef.current ? 'unsaved' : 'saved');
+      if (retriesRef.current > 0) notify('Back online. All changes saved');
+      retriesRef.current = 0;
       setHistoryKey((k) => k + 1);
       if (titleChanged) onChanged();
     } catch (e) {
+      // The edit is still only in this tab: keep it marked unsaved so the
+      // close-tab warning and the retry logic below both know about it.
+      dirtyRef.current = true;
       if (e.status === 409) {
         blockedRef.current = true;
         setStatus('conflict');
+      } else if (e.status === 403) {
+        blockedRef.current = true;
+        setDoc((d) => ({ ...d, role: 'viewer' })); // owner changed our access while we were editing
+        setStatus('readonly');
+        notify(e.message, 'error');
+      } else if (e.status === 404) {
+        blockedRef.current = true;
+        setStatus('gone');
+      } else if (e.status === 401) {
+        blockedRef.current = true; // the app returns to the sign-in screen
+      } else if (isRetryable(e)) {
+        retriesRef.current += 1;
+        retryIn = Math.min(MAX_RETRY_DELAY_MS, 2000 * 2 ** (retriesRef.current - 1));
+        setStatus('retrying');
+        if (retriesRef.current === 1) notify("Can't reach the server. Your changes are kept and will be saved when it is back.", 'error');
       } else {
         setStatus('error');
         notify(e.message, 'error');
       }
     } finally {
       savingRef.current = false;
-      if (dirtyRef.current && !blockedRef.current) timerRef.current = setTimeout(save, SAVE_DELAY_MS);
+      if (!blockedRef.current) {
+        if (retryIn) timerRef.current = setTimeout(save, retryIn);
+        else if (succeeded && dirtyRef.current) timerRef.current = setTimeout(save, SAVE_DELAY_MS);
+      }
     }
   }, [docId, notify, onChanged]);
 
   const scheduleSave = useCallback(() => {
-    if (blockedRef.current) return;
+    if (blockedRef.current || !canEditRef.current) return;
     dirtyRef.current = true;
     setStatus('unsaved');
     clearTimeout(timerRef.current);
@@ -155,6 +192,46 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onCopied, onD
     onBlur: () => (focusedRef.current = false),
   });
 
+  // Keep the editor's editability in sync with the current role.
+  useEffect(() => {
+    // Second argument false: changing editability must not fire an "update"
+    // event, which would trigger an autosave (403 for viewers, and a needless
+    // version bump that would make a collaborator's next save conflict).
+    if (editor && !editor.isDestroyed && editor.isEditable !== canEdit) editor.setEditable(canEdit, false);
+  }, [editor, canEdit]);
+
+  // Retry right away when the browser comes back online.
+  useEffect(() => {
+    const onOnline = () => {
+      if (dirtyRef.current && !blockedRef.current) save();
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [save]);
+
+  // Close the "more" menu on outside click or Escape.
+  useEffect(() => {
+    const close = (e) => {
+      const menu = menuRef.current;
+      if (!menu?.open) return;
+      if (e.type === 'keydown' ? e.key === 'Escape' : !menu.contains(e.target)) menu.removeAttribute('open');
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', close);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', close);
+    };
+  }, []);
+
+  // Browser tab shows the document title.
+  useEffect(() => {
+    document.title = `${title.trim() || 'Untitled'} · Ajaia Docs`;
+    return () => {
+      document.title = 'Ajaia Docs';
+    };
+  }, [title]);
+
   // Replace local state with a server copy (remote change, restore, or conflict recovery).
   const applyDocument = useCallback(
     (document) => {
@@ -166,7 +243,13 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onCopied, onD
       dirtyRef.current = false;
       blockedRef.current = false;
       setTitle(document.title);
-      setDoc((d) => ({ ...d, title: document.title, updatedAt: document.updatedAt, updatedBy: document.updatedBy }));
+      setDoc((d) => ({
+        ...d,
+        title: document.title,
+        updatedAt: document.updatedAt,
+        updatedBy: document.updatedBy,
+        role: document.role || d.role,
+      }));
       setStatus('saved');
       setRemoteNotice(null);
       setHistoryKey((k) => k + 1);
@@ -359,7 +442,7 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onCopied, onD
                 {doc.role === 'viewer' && <IconLock size={12} />} {doc.role === 'viewer' ? 'View only' : 'Can edit'} · shared by {doc.owner.name}
               </span>
             )}
-            <details className="menu">
+            <details className="menu" ref={menuRef}>
               <summary className="icon-btn" aria-label="More actions"><IconMore /></summary>
               {/* Close the menu after any action. */}
               <div className="menu-items" onClick={(e) => e.currentTarget.closest('details').removeAttribute('open')}>
@@ -381,7 +464,8 @@ function LoadedEditor({ docId, initialDoc, currentUser, onChanged, onCopied, onD
           </div>
         </div>
         <div className="status-row">
-          {canEdit ? (
+          {/* After losing edit access mid-session, keep explaining that the last edits were not saved. */}
+          {canEdit || status === 'readonly' ? (
             <span className={`status ${status}`} role="status" aria-live="polite">
               {STATUS_LABEL[status]}
               {status === 'conflict' && (

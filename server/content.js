@@ -14,6 +14,14 @@ const SANITIZE_OPTIONS = {
   ],
   allowedAttributes: { a: ['href', 'target', 'rel'] },
   allowedSchemes: ['http', 'https', 'mailto'],
+  // Links from imported files open in a new tab without giving the target page
+  // access to window.opener (reverse tabnabbing).
+  transformTags: {
+    a: (tagName, attribs) => ({
+      tagName,
+      attribs: { ...attribs, target: '_blank', rel: 'noopener noreferrer nofollow' },
+    }),
+  },
 };
 
 export function sanitizeContent(html) {

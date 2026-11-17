@@ -23,8 +23,10 @@ export function usePresence(docId, { isEditing, onServerState }) {
         if (stopped) return;
         setViewers(state.viewers);
         callbacks.current.onServerState(state);
-      } catch {
+      } catch (e) {
         // Presence is best-effort; editing keeps working if a heartbeat fails.
+        // Stop entirely if the document is gone or the session ended.
+        if (e.status === 404 || e.status === 401) return;
       }
       if (!stopped) timer = setTimeout(beat, document.hidden ? HIDDEN_INTERVAL_MS : ACTIVE_INTERVAL_MS);
     };
