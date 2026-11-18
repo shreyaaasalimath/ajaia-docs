@@ -2,7 +2,7 @@
 
 **Candidate:** Shreya Basavaraj Salimath
 **Live app:** https://ajaia-docs-eysg.onrender.com
-**Walkthrough video:** `<VIDEO_URL>` (also in `VIDEO_URL.txt`)
+**Walkthrough video:** https://www.loom.com/share/79cd23723c85486195eebcfdce661520 (also in `VIDEO_URL.txt`)
 **Source code:** https://github.com/shreyaaasalimath/ajaia-docs (also included in this folder)
 
 ## How to review in 3 minutes
