@@ -1,9 +1,9 @@
 # Submission: Ajaia AI-Native Full Stack Developer Assignment
 
 **Candidate:** Shreya Basavaraj Salimath
-**Live app:** `<LIVE_URL>`
+**Live app:** https://ajaia-docs-eysg.onrender.com
 **Walkthrough video:** `<VIDEO_URL>` (also in `VIDEO_URL.txt`)
-**Source code:** `<GITHUB_URL>` (also included in this folder)
+**Source code:** https://github.com/shreyaaasalimath/ajaia-docs (also included in this folder)
 
 ## How to review in 3 minutes
 

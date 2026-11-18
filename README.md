@@ -4,7 +4,7 @@
 
 A lightweight collaborative document editor: create and edit rich-text documents, import files, share with teammates as editors or viewers, see who else is in a document, receive their changes live, and roll back to any earlier version.
 
-**Live app:** `<LIVE_URL>`
+**Live app:** https://ajaia-docs-eysg.onrender.com
 Anyone can **create an account** on the sign-in page. For quick review, the deployment also seeds **demo accounts** (password `password123`, set by the `DEMO_PASSWORD` environment variable; turn demo data off with `SEED_DEMO_DATA=false`):
 
 | Account | Role in the seeded data |
